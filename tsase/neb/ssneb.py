@@ -93,12 +93,14 @@ class ssneb:
         # set the path by linear interpolation between end points
         n = self.numImages - 1
         self.path = interpolate_path(p1, p2, self.numImages)
-        calc = p1.get_calculator()
+        calc = p1.calc
         for i in range(1, n):
             fdname = '0'+str(i)
             if (not self.parallel) or (self.parallel and self.rank == 0):
                 if not os.path.exists(fdname): os.mkdir(fdname)
-            self.path[i].set_calculator(calc)
+            self.path[i].calc = calc
+        self.path[0].calc = p1.calc
+        self.path[n].calc = p2.calc
         self.Umaxi = 1
 
         # calculate the Jacobian so that a cell move have the same units and weight as an atomic move
