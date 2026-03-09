@@ -99,8 +99,8 @@ class ssneb:
             if (not self.parallel) or (self.parallel and self.rank == 0):
                 if not os.path.exists(fdname): os.mkdir(fdname)
             self.path[i].calc = calc
-        for i in range(n):
-            self.path[i].write('Image{}.cif'.format(i))
+        for i, s in enumerate(self.path):
+            s.write('Image{}.cif'.format(i))
         self.path[0].calc = p1.calc
         self.path[n].calc = p2.calc
         self.Umaxi = 1
