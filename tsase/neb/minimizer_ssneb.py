@@ -36,10 +36,10 @@ class minimizer_ssneb:
                 traj = io.trajectory.Trajectory(self.trajectory, 'w')
             if self.energy_file is not None:
                 energy_out = open(self.energy_file, 'w')
-                energy_out.write('# Iteration | Energies of images\n')
+                energy_out.write('# Iteration | Image Index | Energy\n')
             if self.dipole_file is not None:
                 dipole_out = open(self.dipole_file, 'w')
-                dipole_out.write('# Iteration | Dipoles of images\n')
+                dipole_out.write('# Iteration | Image Index | Dipole X | Dipole Y | Dipole Z\n')
         while fMax > forceConverged and iterations < maxIterations:
             self.step()
             fMax = 0.0
@@ -73,18 +73,15 @@ class minimizer_ssneb:
                     for image in self.band.path:
                         traj.write(image)
                 if self.energy_file is not None:
-                    energies = [img.u for img in self.band.path]
-                    energy_out.write(f'{iterations+1} ' + ' '.join(f'{e:.6f}' for e in energies) + '\n')
+                    for i, img in enumerate(self.band.path):
+                        energy_out.write(f'{iterations+1} {i} {img.u:.6f}\n')
                 if self.dipole_file is not None:
-                    dipoles = []
-                    for img in self.band.path:
+                    for i, img in enumerate(self.band.path):
                         try:
                             dipole = img.get_dipole_moment()
-                            dipoles.append(dipole)
                         except:
-                            dipoles.append([0.0, 0.0, 0.0])  # default if not available
-                    dipole_str = ' '.join(f'{d[0]:.6f} {d[1]:.6f} {d[2]:.6f}' for d in dipoles)
-                    dipole_out.write(f'{iterations+1} ' + dipole_str + '\n')
+                            dipole = [0.0, 0.0, 0.0]  # default if not available
+                        dipole_out.write(f'{iterations+1} {i} {dipole[0]:.6f} {dipole[1]:.6f} {dipole[2]:.6f}\n')
 
             iterations += 1
 
