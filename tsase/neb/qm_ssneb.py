@@ -11,16 +11,16 @@ class qm_ssneb(minimizer_ssneb):
     Class containing a quick-min optimizer for nudged elastic bands
     '''
 
-    def __init__(self, path, maxmove=0.2, dt=0.05, **kwargs):
+    def __init__(self, path, maxmove=0.2, dt=0.05, xyz_dir=None):
         '''
         Constructor
             path    - neb object to optimize
             pot     - potential energy surface to optimize on
             maxmove - maximum distance that the optimizer can move in one step
             dt      - differential timestep
-            **kwargs: keyword arguments to pass to minimizer_ssneb class (e.g. trajectory)
+            xyz_dir: output directory for per-iteration extxyz files
         '''
-        minimizer_ssneb.__init__(self, path, **kwargs)
+        minimizer_ssneb.__init__(self, path, xyz_dir=xyz_dir)
         self.maxmove = maxmove
         self.dt=dt
 
@@ -58,5 +58,3 @@ class qm_ssneb(minimizer_ssneb):
             ct  = self.band.path[i].get_cell()
             ct += np.dot(ct, dR[-3:]) / self.band.jacobian
             self.band.path[i].set_cell(ct, scale_atoms=True)
-
-

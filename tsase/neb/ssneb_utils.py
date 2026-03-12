@@ -32,7 +32,7 @@ def compute_jacobian(vol1, vol2, natom, weight=1.0):
     return avglen * natom ** 0.5 * weight
 
 
-def interpolate_path(p1, p2, num_images):
+def _interpolate_segment(p1, p2, num_images):
     """Linearly interpolate a path between two endpoint structures.
 
     Interpolates both the cell vectors and fractional atomic coordinates.
@@ -71,6 +71,66 @@ def interpolate_path(p1, p2, num_images):
         img.set_positions(rt)
         path.append(img)
     path.append(p2.copy())
+    return path
+
+
+def interpolate_path(endpoints, indices, num_images):
+    """Interpolate a path through endpoints.
+
+    Supports two usage patterns:
+      1) interpolate_path(p1, p2, num_images) for a single segment.
+      2) interpolate_path(endpoints, indices, num_images) for multiple segments.
+
+    Args:
+        endpoints: List of ASE Atoms objects [p0, p1, ...].
+        indices: List of integer indices (same length as endpoints) marking
+                 where each endpoint should appear in the final path.
+        num_images: Total number of images in the final path.
+
+    Returns:
+        List of num_images ASE Atoms objects with linear interpolation between
+        successive endpoints, including all endpoints exactly at the given
+        indices.
+    """
+    # Backwards-compatible single-segment path: (p1, p2, num_images)
+    if not isinstance(endpoints, (list, tuple)):
+        return _interpolate_segment(endpoints, indices, num_images)
+
+    if endpoints is None or indices is None:
+        raise ValueError("endpoints and indices must be provided for multi-endpoint interpolation")
+    if len(endpoints) < 2:
+        raise ValueError("endpoints must contain at least two structures")
+    if len(endpoints) != len(indices):
+        raise ValueError("endpoints and indices must be the same length")
+    if sorted(indices) != list(indices):
+        raise ValueError("indices must be sorted in ascending order")
+    if indices[0] != 0:
+        raise ValueError("indices must start at 0")
+    if indices[-1] != num_images - 1:
+        raise ValueError("last index must be num_images - 1")
+    if len(set(indices)) != len(indices):
+        raise ValueError("indices must be unique")
+    for i in indices:
+        if i < 0 or i >= num_images:
+            raise ValueError("indices must be within [0, num_images-1]")
+    for i in range(len(indices) - 1):
+        if indices[i + 1] <= indices[i]:
+            raise ValueError("indices must be strictly increasing")
+
+    path = []
+    for i in range(len(endpoints) - 1):
+        start = endpoints[i]
+        end = endpoints[i + 1]
+        seg_images = indices[i + 1] - indices[i] + 1
+        if seg_images < 2:
+            raise ValueError("each segment must span at least 2 images")
+        segment = _interpolate_segment(start, end, seg_images)
+        if i > 0:
+            segment = segment[1:]  # drop duplicate endpoint
+        path.extend(segment)
+
+    if len(path) != num_images:
+        raise ValueError("interpolation produced an unexpected number of images")
     return path
 
 

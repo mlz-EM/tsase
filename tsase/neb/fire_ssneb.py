@@ -5,26 +5,26 @@ import numpy as np
 
 class fire_ssneb(minimizer_ssneb):
 
-    def __init__(self, path, maxmove = 0.2, dt = 0.1, dtmax = 1.0, 
+    def __init__(self, path, maxmove = 0.2, dt = 0.1, dtmax = 1.0,
                  Nmin = 5, finc = 1.1, fdec = 0.5, astart = 0.1, fa = 0.99,
-                 **kwargs):
+                 xyz_dir=None):
         """
-        path    - neb object to optimize
-
-        Fire initializer function, called in script before min
-        Optional arguments:
-          dt:       initial dynamical timestep
-          dtmax:    maximum timestep
-          Nmin:     ???
-          finc:     ???
-          fdec:     ???
-          astart:   ???
-          fa:       ???
-          maxmove:  maximum amount the point can move during optimization
-          **kwargs: keyword arguments to pass to minimizer_ssneb class (e.g. trajectory)
+        FIRE (Fast Inertial Relaxation Engine) initializer for SS-NEB optimization.
+        
+        Parameters:
+        path     - NEB (Nudged Elastic Band) object to optimize
+        maxmove  - Maximum displacement (in atomic units) an atom can move in one step
+        dt       - Initial dynamical time step for the FIRE algorithm
+        dtmax    - Maximum allowed time step to prevent instability
+        Nmin     - Minimum number of consecutive steps with positive power before increasing dt
+        finc     - Factor by which dt is increased when conditions are met (typically > 1)
+        fdec     - Factor by which dt is decreased when power is negative (typically < 1)
+        astart   - Initial mixing parameter alpha (controls velocity mixing, 0 < astart < 1)
+        fa       - Factor by which alpha is decreased each time dt is increased (typically < 1)
+        xyz_dir - Output directory for per-iteration extxyz files
         """
 
-        minimizer_ssneb.__init__(self, path, **kwargs)
+        minimizer_ssneb.__init__(self, path, xyz_dir=xyz_dir)
         self.maxmove=maxmove
         self.dt=dt
         self.dtmax=dtmax
@@ -84,4 +84,3 @@ class fire_ssneb(minimizer_ssneb):
             ct  = self.band.path[i].get_cell()
             ct += np.dot(ct, dR[-3:]) / self.band.jacobian
             self.band.path[i].set_cell(ct, scale_atoms=True)
-

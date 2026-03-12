@@ -2,20 +2,77 @@
 ssneb mimizer superclass
 '''
 
+import os
+from copy import deepcopy
 from .util import vmag, sPBC
 from ase import io
-from numpy import dot,sqrt,vdot
+from numpy import dot, sqrt, vdot
 
 class minimizer_ssneb:
     '''
     Neb minimizer superclass
     '''
 
-    def __init__(self, band, trajectory=None, energy_file=None, dipole_file=None): 
+    def __init__(self, band, xyz_dir=None):
         self.band = band
-        self.trajectory = trajectory
-        self.energy_file = energy_file
-        self.dipole_file = dipole_file
+        if xyz_dir is None:
+            xyz_dir = getattr(band, "xyz_dir", "neb_xyz")
+        self.xyz_dir = xyz_dir
+
+    def _write_iteration_xyz(self, iteration):
+        if self.band.parallel and self.band.rank != 0:
+            return
+        os.makedirs(self.xyz_dir, exist_ok=True)
+        images = []
+        for i, img in enumerate(self.band.path):
+            snap = img.copy()
+            snap.calc = None
+            snap.info = deepcopy(getattr(img, "info", {}))
+            snap.info["neb_image"] = i
+            if hasattr(img, "u"):
+                try:
+                    snap.info["energy"] = float(img.u)
+                except Exception:
+                    pass
+            if hasattr(img, "f"):
+                try:
+                    snap.arrays["forces"] = img.f.copy()
+                except Exception:
+                    pass
+            images.append(snap)
+        outfile = os.path.join(self.xyz_dir, f"iter_{iteration:04d}.xyz")
+        io.write(outfile, images, format="extxyz")
+
+    def _save_energy_plot(self, iteration):
+        if self.band.parallel and self.band.rank != 0:
+            return
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+        except Exception:
+            return
+        os.makedirs(self.xyz_dir, exist_ok=True)
+        energies = []
+        for img in self.band.path:
+            if hasattr(img, "u"):
+                energies.append(float(img.u))
+            else:
+                try:
+                    energies.append(float(img.get_potential_energy()))
+                except Exception:
+                    energies.append(0.0)
+        x = list(range(len(energies)))
+        plt.figure(figsize=(6, 4))
+        plt.plot(x, energies, marker="o", linewidth=1.5)
+        plt.xlabel("Image Index")
+        plt.ylabel("Energy")
+        plt.title(f"NEB Energies (iter {iteration})")
+        plt.grid(True, alpha=0.3)
+        outfile = os.path.join(self.xyz_dir, f"energy_iter_{iteration:04d}.png")
+        plt.tight_layout()
+        plt.savefig(outfile, dpi=150)
+        plt.close()
 
     def minimize(self, forceConverged = 0.01, maxIterations = 1000):
         '''
@@ -32,14 +89,6 @@ class minimizer_ssneb:
             feout = open('fe.out','a')
             feout.write('Iteration       Total Force       Perp Force        MaxU       MaxI    Stress on CI     \n')
             feout.write('------------------------------------------------------------  \n')
-            if self.trajectory is not None:
-                traj = io.trajectory.Trajectory(self.trajectory, 'w')
-            if self.energy_file is not None:
-                energy_out = open(self.energy_file, 'w')
-                energy_out.write('# Iteration | Image Index | Energy\n')
-            if self.dipole_file is not None:
-                dipole_out = open(self.dipole_file, 'w')
-                dipole_out.write('# Iteration | Image Index | Dipole X | Dipole Y | Dipole Z\n')
         while fMax > forceConverged and iterations < maxIterations:
             self.step()
             fMax = 0.0
@@ -53,9 +102,6 @@ class minimizer_ssneb:
                     fMax = fi
                 if fPi > fPMax:
                     fPMax = fPi
-                if (not self.band.parallel) or (self.band.parallel and self.band.rank == 0) :
-                    #if iterations % 50 == 0:
-                    io.write(str(i)+'.CON',self.band.path[i],format='vasp')
 
             maxi=self.band.Umaxi
             fci =self.band.path[maxi].st 
@@ -69,19 +115,8 @@ class minimizer_ssneb:
                 print("-------------------------SSNEB------------------------------")
                 print(output)
                 feout.write(output+'\n')
-                if self.trajectory is not None:
-                    for image in self.band.path:
-                        traj.write(image)
-                if self.energy_file is not None:
-                    for i, img in enumerate(self.band.path):
-                        energy_out.write(f'{iterations+1} {i} {img.u:.6f}\n')
-                if self.dipole_file is not None:
-                    for i, img in enumerate(self.band.path):
-                        try:
-                            dipole = img.get_dipole_moment()
-                        except:
-                            dipole = [0.0, 0.0, 0.0]  # default if not available
-                        dipole_out.write(f'{iterations+1} {i} {dipole[0]:.6f} {dipole[1]:.6f} {dipole[2]:.6f}\n')
+            self._write_iteration_xyz(iterations + 1)
+            self._save_energy_plot(iterations + 1)
 
             iterations += 1
 
@@ -91,12 +126,6 @@ class minimizer_ssneb:
             print("Image    ReCoords      E      RealForce      Image")
             feout.write("-----------------------SSNEB Finished------------------------------\n")
             feout.write("Image    ReCoords      E      RealForce      Image \n")
-            if self.trajectory is not None:
-                traj.close()
-            if self.energy_file is not None:
-                energy_out.close()
-            if self.dipole_file is not None:
-                dipole_out.close()
         for i in range(self.band.numImages):
             if i==0:
                 Rm1 = 0.0
@@ -120,4 +149,3 @@ class minimizer_ssneb:
 
         if (not self.band.parallel) or (self.band.parallel and self.band.rank == 0) :
             feout.close()
-

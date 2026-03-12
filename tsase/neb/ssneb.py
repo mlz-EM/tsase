@@ -23,7 +23,7 @@ from tsase.neb.util import vmag, vmag2, vunit, vproj, vdot, sPBC
 from tsase.neb.ssneb_utils import (compute_jacobian, interpolate_path,
                                     initialize_image_properties,
                                     image_distance_vector)
-from ase import atoms, units
+from ase import atoms, units, io
 
 class ssneb:
     """
@@ -33,7 +33,8 @@ class ssneb:
     def __init__(self, p1, p2, numImages = 7, k = 5.0, tangent = "new",       \
                  dneb = False, dnebOrg = False, method = 'normal',            \
                  onlyci = False, weight = 1, parallel = False, ss = True,     \
-                 express = numpy.zeros((3,3)), fixstrain = numpy.ones((3,3))):
+                 express = numpy.zeros((3,3)), fixstrain = numpy.ones((3,3)), \
+                 xyz_dir = "neb_xyz"):
         """
         The neb constructor.
         Parameters:
@@ -66,6 +67,8 @@ class ssneb:
         self.parallel  = parallel 
         self.ss        = ss
         self.express   = express * units.GPa
+        self.rank = 0
+        self.size = 1
         if express[0][1]**2+express[0][2]**2+express[1][2]**2 > 1e-3:
            express[0][1] = 0
            express[0][2] = 0
@@ -75,7 +78,8 @@ class ssneb:
         self.fixstrain = fixstrain
 
         # check the orientation of the cell, make sure a is along x, b is on xoy plane
-        for p in [p1,p2]:
+        endpoints_for_check = p1 if isinstance(p1, (list, tuple)) else [p1, p2]
+        for p in endpoints_for_check:
             cr = p.get_cell()
             if cr[0][1]**2+cr[0][2]**2+cr[1][2]**2 > 1e-3: 
                 if (not self.parallel) or (self.parallel and self.rank == 0):
@@ -90,10 +94,23 @@ class ssneb:
             self.rank = self.comm.rank
             self.MPIDB= MPI.DOUBLE
 
+        self.xyz_dir = xyz_dir
+
         # set the path by linear interpolation between end points
         n = self.numImages - 1
-        self.path = interpolate_path(p1, p2, self.numImages)
-        calc = p1.calc
+        if isinstance(p1, (list, tuple)):
+            endpoints = p1
+            indices = p2
+            if not isinstance(indices, (list, tuple)):
+                raise ValueError("when p1 is a list of endpoints, p2 must be a list of indices")
+            p1_first = endpoints[0]
+            p2_last = endpoints[-1]
+            self.path = interpolate_path(endpoints, indices, self.numImages)
+        else:
+            p1_first = p1
+            p2_last = p2
+            self.path = interpolate_path(p1, p2, self.numImages)
+        calc = p1_first.calc
         for i in range(1, n):
             fdname = '0'+str(i)
             if (not self.parallel) or (self.parallel and self.rank == 0):
@@ -101,8 +118,11 @@ class ssneb:
             self.path[i].calc = calc
         for i, s in enumerate(self.path):
             s.write('Image{}.cif'.format(i))
-        self.path[0].calc = p1.calc
-        self.path[n].calc = p2.calc
+        if (not self.parallel) or (self.parallel and self.rank == 0):
+            os.makedirs(self.xyz_dir, exist_ok=True)
+            io.write(os.path.join(self.xyz_dir, "iter_0000.xyz"), self.path, format="extxyz")
+        self.path[0].calc = p1_first.calc
+        self.path[n].calc = p2_last.calc
         self.Umaxi = 1
 
         # calculate the Jacobian so that a cell move have the same units and weight as an atomic move
@@ -400,4 +420,3 @@ class ssneb:
                 # only move the climing image
                 if(self.method == 'ci' and self.onlyci): 
                     self.path[i].totalf *= 0.0
-
