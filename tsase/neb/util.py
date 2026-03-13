@@ -8,6 +8,18 @@ import pickle
 from math import sqrt, sin, cos, log, pi, ceil
 from random import random, normalvariate
 
+# Logging level placeholder used by legacy call sites.
+ERR = "ERROR"
+
+
+def printf(message, level=None):
+    """Compatibility print helper used across legacy util functions."""
+    if level is None:
+        print(message)
+    else:
+        print(f"{message} {level}")
+
+
 def sPBC(vdir):
     return (vdir % 1.0 + 1.5) % 1.0 - 0.5
 
@@ -1038,4 +1050,3 @@ elementMasses= [    1.0,            #Xx
                     294,
                     296
                     ]
-
