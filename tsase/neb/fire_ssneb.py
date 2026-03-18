@@ -7,7 +7,8 @@ class fire_ssneb(minimizer_ssneb):
 
     def __init__(self, path, maxmove = 0.2, dt = 0.1, dtmax = 1.0,
                  Nmin = 5, finc = 1.1, fdec = 0.5, astart = 0.1, fa = 0.99,
-                 xyz_dir=None):
+                 xyz_dir=None, output_interval=1,
+                 ci_activation_iteration=None, ci_activation_force=None):
         """
         FIRE (Fast Inertial Relaxation Engine) initializer for SS-NEB optimization.
         
@@ -22,9 +23,19 @@ class fire_ssneb(minimizer_ssneb):
         astart   - Initial mixing parameter alpha (controls velocity mixing, 0 < astart < 1)
         fa       - Factor by which alpha is decreased each time dt is increased (typically < 1)
         xyz_dir - Output directory for per-iteration extxyz files
+        output_interval - Write extxyz snapshots and energy plots every N steps
+        ci_activation_iteration - Turn on climbing image at/after this iteration
+        ci_activation_force - Turn on climbing image once Total Force <= threshold
         """
 
-        minimizer_ssneb.__init__(self, path, xyz_dir=xyz_dir)
+        minimizer_ssneb.__init__(
+            self,
+            path,
+            xyz_dir=xyz_dir,
+            output_interval=output_interval,
+            ci_activation_iteration=ci_activation_iteration,
+            ci_activation_force=ci_activation_force,
+        )
         self.maxmove=maxmove
         self.dt=dt
         self.dtmax=dtmax

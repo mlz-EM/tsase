@@ -25,6 +25,25 @@ from tsase.neb.ssneb_utils import (compute_jacobian, interpolate_path,
                                     image_distance_vector)
 from ase import atoms, units, io
 
+
+def _geometric_tangent(path, index):
+    """Return a solid-state geometric tangent for image ``index``.
+
+    Uses the same image-distance metric as the spring term, falling back to the
+    nonzero forward/backward segment if the centered difference vanishes.
+    """
+    forward = image_distance_vector(path[index + 1], path[index])
+    backward = image_distance_vector(path[index], path[index - 1])
+    tangent = forward + backward
+    if vmag2(tangent) > 1e-30:
+        return tangent
+    if vmag2(forward) > 1e-30:
+        return forward
+    if vmag2(backward) > 1e-30:
+        return backward
+    return tangent
+
+
 class ssneb:
     """
     The generalized nudged elastic path (ssneb) class.
@@ -116,8 +135,6 @@ class ssneb:
             if (not self.parallel) or (self.parallel and self.rank == 0):
                 if not os.path.exists(fdname): os.mkdir(fdname)
             self.path[i].calc = calc
-        for i, s in enumerate(self.path):
-            s.write('Image{}.cif'.format(i))
         if (not self.parallel) or (self.parallel and self.rank == 0):
             os.makedirs(self.xyz_dir, exist_ok=True)
             io.write(os.path.join(self.xyz_dir, "iter_0000.xyz"), self.path, format="extxyz")
@@ -165,8 +182,7 @@ class ssneb:
             dcell  = self.path[i].get_cell() - self.path[0].get_cell()
             strain = numpy.dot(self.path[0].icell, dcell)
             pv     = numpy.vdot(self.express, strain) * self.path[0].get_volume()
-            if (not self.parallel) or (self.parallel and self.rank == 0):
-                print("i,pv:",i,pv)
+            self.path[i].pv = pv
             self.path[i].u += pv
 
     def forces(self):
@@ -261,8 +277,7 @@ class ssneb:
             dcell  = self.path[i].get_cell() - self.path[0].get_cell()
             strain = numpy.dot(self.path[0].icell, dcell)
             pv     = numpy.vdot(self.express, strain) * self.path[0].get_volume()
-            if (not self.parallel) or (self.parallel and self.rank == 0):
-                print("i,pv:",i,pv)
+            self.path[i].pv = pv
             self.path[i].u += pv
 
             if i == 1 or self.path[i].u > self.Umax:
@@ -332,7 +347,9 @@ class ssneb:
                     Up1 = self.path[i + 1].u - self.path[i].u
                     Umin = min(abs(Up1), abs(Um1))
                     Umax = max(abs(Up1), abs(Um1))
-                    if(Um1 > Up1):
+                    if Umax == 0:
+                        self.path[i].n = _geometric_tangent(self.path, i)
+                    elif(Um1 > Up1):
                         dr_dir  = sPBC(self.path[i + 1].vdir - self.path[i].vdir)
                         avgbox  = 0.5*(self.path[i + 1].get_cell() + self.path[i].get_cell())
                         sn      = numpy.dot(dr_dir,avgbox) * Umin
@@ -360,16 +377,29 @@ class ssneb:
                         snb2 = numpy.dot(self.path[i].icell, dh)*0.5 + numpy.dot(self.path[i - 1].icell, dh)*0.5
                         snb  = snb1 * Umax + snb2 * Umin
                         self.path[i].n = numpy.vstack((sn,snb))
+                    if vmag2(self.path[i].n) <= 1e-30:
+                        self.path[i].n = _geometric_tangent(self.path, i)
 
         # Normalize each tangent
         if (not self.parallel) or (self.parallel and self.rank == 0):
+            tangent_header = "{:>10} {:>16} {:>16} {:>12}".format(
+                "ImageNum", "atom", "cell", "pv"
+            )
             print("==========!tangent contribution!==========")
             print("Jacobian:", self.jacobian)
-            print("ImageNum        atom         cell")
+            print(tangent_header)
+            print("-" * len(tangent_header))
         for i in range(1,self.numImages-1):
             self.path[i].n = vunit(self.path[i].n)
             if (not self.parallel) or (self.parallel and self.rank == 0):
-                print(i, vmag(self.path[i].n[:-3]), vmag(self.path[i].n[-3:]))
+                print(
+                    "{:10d} {:16.8f} {:16.8f} {:12.6f}".format(
+                        i,
+                        vmag(self.path[i].n[:-3]),
+                        vmag(self.path[i].n[-3:]),
+                        float(getattr(self.path[i], "pv", 0.0)),
+                    )
+                )
 
         # Loop over each intermediate image and adjust the potential energy,
         # force, and apply the spring force.
