@@ -13,3 +13,4 @@ wheels/
 .ipynb_checkpoints
 .vscode
 .DS_Store
+.cif

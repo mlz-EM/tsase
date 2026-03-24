@@ -7,6 +7,7 @@ from copy import deepcopy
 from .util import vmag, sPBC
 from ase import io
 from numpy import dot, sqrt, vdot
+from .field import POLARIZATION_E_A2_TO_C_M2
 
 class minimizer_ssneb:
     '''
@@ -18,6 +19,8 @@ class minimizer_ssneb:
         band,
         xyz_dir=None,
         output_interval=1,
+        plot_property=None,
+        log_file=None,
         ci_activation_iteration=None,
         ci_activation_force=None,
     ):
@@ -25,7 +28,9 @@ class minimizer_ssneb:
         if xyz_dir is None:
             xyz_dir = getattr(band, "xyz_dir", "neb_xyz")
         self.xyz_dir = xyz_dir
+        self.log_file = log_file if log_file is not None else getattr(band, "log_file", "fe.out")
         self.output_interval = max(1, int(output_interval))
+        self.plot_property = self._normalize_plot_property(plot_property)
         self.ci_activation_iteration = ci_activation_iteration
         self.ci_activation_force = ci_activation_force
         self._ci_target_method = getattr(self.band, "method", "normal")
@@ -36,6 +41,59 @@ class minimizer_ssneb:
         ):
             self.band.method = "normal"
             self._ci_active = False
+
+    def _normalize_plot_property(self, plot_property):
+        if plot_property is None:
+            return None
+        normalized = str(plot_property).strip().lower()
+        if normalized in {"", "none", "off", "false"}:
+            return None
+        aliases = {
+            "px": "px",
+            "py": "py",
+            "pz": "pz",
+            "p_mag": "p_mag",
+            "pmag": "p_mag",
+            "p-magnitude": "p_mag",
+            "p_magnitude": "p_mag",
+        }
+        if normalized not in aliases:
+            raise ValueError(
+                "plot_property must be one of: none, Px, Py, Pz, P_mag"
+            )
+        return aliases[normalized]
+
+    def _get_plot_series(self):
+        if self.plot_property is None:
+            return None, None
+
+        values = []
+        for img in self.band.path:
+            polarization = getattr(img, "polarization_c_per_m2", None)
+            if polarization is None or len(polarization) != 3:
+                polarization = (
+                    getattr(img, "polarization", None)
+                )
+                if polarization is None or len(polarization) != 3:
+                    return None, None
+                polarization = POLARIZATION_E_A2_TO_C_M2 * polarization
+
+            if self.plot_property == "px":
+                values.append(float(polarization[0]))
+            elif self.plot_property == "py":
+                values.append(float(polarization[1]))
+            elif self.plot_property == "pz":
+                values.append(float(polarization[2]))
+            elif self.plot_property == "p_mag":
+                values.append(float((polarization[0] ** 2 + polarization[1] ** 2 + polarization[2] ** 2) ** 0.5))
+
+        labels = {
+            "px": "Polarization Px (C/m^2)",
+            "py": "Polarization Py (C/m^2)",
+            "pz": "Polarization Pz (C/m^2)",
+            "p_mag": "Polarization |P| (C/m^2)",
+        }
+        return values, labels[self.plot_property]
 
     def _should_output(self, iteration, max_iterations, converged):
         return (
@@ -93,6 +151,13 @@ class minimizer_ssneb:
                     snap.info["energy"] = float(img.u)
                 except Exception:
                     pass
+            if hasattr(img, "polarization_c_per_m2"):
+                try:
+                    snap.info["polarization_c_per_m2"] = [
+                        float(value) for value in img.polarization_c_per_m2
+                    ]
+                except Exception:
+                    pass
             if hasattr(img, "f"):
                 try:
                     snap.arrays["forces"] = img.f.copy()
@@ -112,29 +177,75 @@ class minimizer_ssneb:
         except Exception:
             return
         os.makedirs(self.xyz_dir, exist_ok=True)
-        energies = []
+        adjusted_energies = []
+        raw_energies = []
         for img in self.band.path:
             if hasattr(img, "u"):
-                energies.append(float(img.u))
+                adjusted_energies.append(float(img.u))
             else:
                 try:
-                    energies.append(float(img.get_potential_energy()))
+                    adjusted_energies.append(float(img.get_potential_energy()))
                 except Exception:
-                    energies.append(0.0)
+                    adjusted_energies.append(0.0)
+            raw_energies.append(float(getattr(img, "base_u", adjusted_energies[-1])))
         natoms = max(1, len(self.band.path[0])) if self.band.path else 1
-        reference_energy = energies[0] if energies else 0.0
-        rel_energies = [1000.0 * (energy - reference_energy) / natoms for energy in energies]
-        x = list(range(len(rel_energies)))
-        plt.figure(figsize=(6, 4))
-        plt.plot(x, rel_energies, marker="o", linewidth=1.5)
-        plt.xlabel("Image Index")
-        plt.ylabel("Relative Energy - E0 (meV/atom)")
-        plt.title(f"Relative NEB Energies (iter {iteration})")
-        plt.grid(True, alpha=0.3)
+        adjusted_reference = adjusted_energies[0] if adjusted_energies else 0.0
+        raw_reference = raw_energies[0] if raw_energies else adjusted_reference
+        rel_adjusted = [
+            1000.0 * (energy - adjusted_reference) / natoms
+            for energy in adjusted_energies
+        ]
+        rel_raw = [
+            1000.0 * (energy - raw_reference) / natoms
+            for energy in raw_energies
+        ]
+        x = list(range(len(rel_adjusted)))
+        fig, ax1 = plt.subplots(figsize=(6, 4))
+        ax1.plot(
+            x,
+            rel_raw,
+            marker="o",
+            linewidth=1.5,
+            color="tab:blue",
+            label="Raw energy",
+        )
+        ax1.plot(
+            x,
+            rel_adjusted,
+            marker="^",
+            linewidth=1.5,
+            color="tab:green",
+            label="Field-adjusted enthalpy",
+        )
+        ax1.set_xlabel("Image Index")
+        ax1.set_ylabel("Relative Energy - E0 (meV/atom)", color="tab:blue")
+        ax1.tick_params(axis="y", labelcolor="tab:blue")
+        ax1.set_title(f"Relative NEB Energies (iter {iteration})")
+        ax1.grid(True, alpha=0.3)
+
+        plot_values, plot_label = self._get_plot_series()
+        lines = list(ax1.get_lines())
+        labels = [line.get_label() for line in lines]
+        if plot_values is not None:
+            ax2 = ax1.twinx()
+            line2, = ax2.plot(
+                x,
+                plot_values,
+                marker="s",
+                linewidth=1.3,
+                linestyle="--",
+                color="tab:orange",
+                label=plot_label,
+            )
+            ax2.set_ylabel(plot_label, color="tab:orange")
+            ax2.tick_params(axis="y", labelcolor="tab:orange")
+            lines.append(line2)
+            labels.append(plot_label)
+        ax1.legend(lines, labels, loc="best")
         outfile = os.path.join(self.xyz_dir, f"energy_iter_{iteration:04d}.png")
-        plt.tight_layout()
-        plt.savefig(outfile, dpi=150)
-        plt.close()
+        fig.tight_layout()
+        fig.savefig(outfile, dpi=150)
+        plt.close(fig)
 
     def minimize(self, forceConverged = 0.01, maxIterations = 1000):
         '''
@@ -159,10 +270,15 @@ class minimizer_ssneb:
             status_separator = "-" * len(status_header)
             print(status_header)
             print(status_separator)
-            feout = open('fe.out','a')
+            log_dir = os.path.dirname(self.log_file)
+            if log_dir:
+                os.makedirs(log_dir, exist_ok=True)
+            feout = open(self.log_file, 'a')
             feout.write(status_header + '\n')
             feout.write(status_separator + '\n')
         while fMax > forceConverged and iterations < maxIterations:
+            if hasattr(self.band, "update_image_rates"):
+                self.band.update_image_rates(iterations)
             self.step()
             fMax = 0.0
             fPMax = 0.0
@@ -177,7 +293,10 @@ class minimizer_ssneb:
                     fPMax = fPi
 
             maxi=self.band.Umaxi
-            fci =self.band.path[maxi].st 
+            cii = getattr(self.band, "CI_index", None)
+            if cii is None:
+                cii = maxi
+            fci =self.band.path[cii].st
             fci =vmag(fci)
             #fci =np.max(abs(fci))/self.band.jacobian
             output = "{:10d} {:16.9g} {:16.9g} {:12.9g} {:8d} {:16.9g} {:10.5g} {:>8}".format(
@@ -195,6 +314,8 @@ class minimizer_ssneb:
             should_output = self._should_output(
                 iteration, maxIterations, fMax <= forceConverged
             )
+            if hasattr(self.band, "write_diagnostics"):
+                self.band.write_diagnostics(iteration)
             if (not self.band.parallel) or (self.band.parallel and self.band.rank == 0) :
                 print("-------------------------SSNEB------------------------------")
                 print(status_header)

@@ -1,0 +1,27 @@
+data_PZTN982_Pc_80C
+_chemical_name_common           'PZTN982_Pc_80C'
+_cell_length_a                  4.1557
+_cell_length_b                  5.8630
+_cell_length_c                  5.8892
+_cell_angle_alpha               90
+_cell_angle_beta                89.683
+_cell_angle_gamma               90
+_cell_volume                    143.49
+
+_symmetry_space_group_name_H-M  'P c'
+_symmetry_Int_Tables_number     7
+
+loop_
+  _atom_site_label
+  _atom_site_type_symbol
+  _atom_site_fract_x
+  _atom_site_fract_y
+  _atom_site_fract_z
+  _atom_site_occupancy
+  _atom_site_U_iso_or_equiv
+  _atom_site_Wyckoff_symbol
+Pb1  Pb  0.071  0.758  0.050  1.0  0.0393  2a
+Zr   Zr  0.543  0.249  0.020  1.0  0.0076  2a
+O1   O   0.030  0.279 -0.030  1.0  0.0089  2a
+O2   O   0.546  0.514  0.259  1.0  0.0317  2a
+O3   O   0.500  0.000  0.250  1.0  0.0317  2a

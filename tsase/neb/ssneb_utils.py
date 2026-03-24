@@ -8,6 +8,8 @@ without requiring an ssneb instance.
 """
 
 import numpy
+from ase import io
+from scipy.optimize import linear_sum_assignment
 from tsase.neb.util import sPBC
 
 
@@ -96,42 +98,94 @@ def interpolate_path(endpoints, indices, num_images):
     if not isinstance(endpoints, (list, tuple)):
         return _interpolate_segment(endpoints, indices, num_images)
 
-    if endpoints is None or indices is None:
-        raise ValueError("endpoints and indices must be provided for multi-endpoint interpolation")
-    if len(endpoints) < 2:
-        raise ValueError("endpoints must contain at least two structures")
-    if len(endpoints) != len(indices):
-        raise ValueError("endpoints and indices must be the same length")
+    return generate_multi_point_path(endpoints, indices, num_images)
+
+
+def spatial_map(reference, candidate):
+    """Reorder a structure to match the reference atom indexing."""
+    if len(reference) != len(candidate):
+        raise ValueError("all structures must contain the same number of atoms")
+
+    ref_symbols = numpy.array(reference.get_chemical_symbols())
+    cand_symbols = numpy.array(candidate.get_chemical_symbols())
+    if sorted(ref_symbols.tolist()) != sorted(cand_symbols.tolist()):
+        raise ValueError("all structures must contain the same species counts")
+
+    ref_frac = reference.get_scaled_positions()
+    cand_frac = candidate.get_scaled_positions()
+    avg_cell = 0.5 * (numpy.array(reference.get_cell()) + numpy.array(candidate.get_cell()))
+    order = numpy.empty(len(reference), dtype=int)
+
+    for symbol in sorted(set(ref_symbols.tolist())):
+        ref_idx = numpy.where(ref_symbols == symbol)[0]
+        cand_idx = numpy.where(cand_symbols == symbol)[0]
+        cost = numpy.zeros((len(ref_idx), len(cand_idx)))
+        for i, ref_i in enumerate(ref_idx):
+            deltas = sPBC(cand_frac[cand_idx] - ref_frac[ref_i])
+            cart = numpy.dot(deltas, avg_cell)
+            cost[i] = numpy.linalg.norm(cart, axis=1)
+        row_ind, col_ind = linear_sum_assignment(cost)
+        order[ref_idx[row_ind]] = cand_idx[col_ind]
+
+    reordered = candidate[order].copy()
+    reordered.info = dict(getattr(candidate, "info", {}))
+    reordered.info["spatial_map_order"] = order.tolist()
+    return reordered
+
+
+def generate_multi_point_path(structures, indices, total_images):
+    """Generate a segmented path passing through user-specified images."""
+    if structures is None or indices is None:
+        raise ValueError("structures and indices must be provided")
+    if len(structures) < 2:
+        raise ValueError("structures must contain at least two images")
+    if len(structures) != len(indices):
+        raise ValueError("structures and indices must be the same length")
     if sorted(indices) != list(indices):
         raise ValueError("indices must be sorted in ascending order")
     if indices[0] != 0:
         raise ValueError("indices must start at 0")
-    if indices[-1] != num_images - 1:
-        raise ValueError("last index must be num_images - 1")
+    if indices[-1] != total_images - 1:
+        raise ValueError("last index must be total_images - 1")
     if len(set(indices)) != len(indices):
         raise ValueError("indices must be unique")
-    for i in indices:
-        if i < 0 or i >= num_images:
-            raise ValueError("indices must be within [0, num_images-1]")
+    for index in indices:
+        if index < 0 or index >= total_images:
+            raise ValueError("indices must be within [0, total_images - 1]")
     for i in range(len(indices) - 1):
         if indices[i + 1] <= indices[i]:
             raise ValueError("indices must be strictly increasing")
 
+    reference = structures[0]
+    mapped_structures = [reference.copy()]
+    for structure in structures[1:]:
+        mapped_structures.append(spatial_map(reference, structure))
+
     path = []
-    for i in range(len(endpoints) - 1):
-        start = endpoints[i]
-        end = endpoints[i + 1]
+    for i in range(len(mapped_structures) - 1):
         seg_images = indices[i + 1] - indices[i] + 1
         if seg_images < 2:
             raise ValueError("each segment must span at least 2 images")
-        segment = _interpolate_segment(start, end, seg_images)
+        segment = _interpolate_segment(mapped_structures[i], mapped_structures[i + 1], seg_images)
         if i > 0:
-            segment = segment[1:]  # drop duplicate endpoint
+            segment = segment[1:]
         path.extend(segment)
 
-    if len(path) != num_images:
+    if len(path) != total_images:
         raise ValueError("interpolation produced an unexpected number of images")
     return path
+
+
+def load_band_configuration_from_xyz(band, xyz_path):
+    """Load image positions and cells from a saved iter_*.xyz file into a band."""
+    images = io.read(xyz_path, ":")
+    if len(images) != band.numImages:
+        raise ValueError(
+            f"restart file contains {len(images)} images, expected {band.numImages}"
+        )
+    for index, image in enumerate(images):
+        band.path[index].set_cell(image.get_cell(), scale_atoms=False)
+        band.path[index].set_positions(image.get_positions())
 
 
 def initialize_image_properties(image, jacobian):

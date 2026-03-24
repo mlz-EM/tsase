@@ -7,7 +7,8 @@ class fire_ssneb(minimizer_ssneb):
 
     def __init__(self, path, maxmove = 0.2, dt = 0.1, dtmax = 1.0,
                  Nmin = 5, finc = 1.1, fdec = 0.5, astart = 0.1, fa = 0.99,
-                 xyz_dir=None, output_interval=1,
+                 xyz_dir=None, output_interval=1, plot_property=None,
+                 log_file=None,
                  ci_activation_iteration=None, ci_activation_force=None):
         """
         FIRE (Fast Inertial Relaxation Engine) initializer for SS-NEB optimization.
@@ -33,6 +34,8 @@ class fire_ssneb(minimizer_ssneb):
             path,
             xyz_dir=xyz_dir,
             output_interval=output_interval,
+            plot_property=plot_property,
+            log_file=log_file,
             ci_activation_iteration=ci_activation_iteration,
             ci_activation_force=ci_activation_force,
         )
@@ -86,12 +89,4 @@ class fire_ssneb(minimizer_ssneb):
             dR = self.dt * self.v[i-1]
             if vmag(dR) > self.maxmove:
                 dR = self.maxmove * vunit(dR)
-            # move R 
-            rt  = self.band.path[i].get_positions()
-            rt += dR[:-3]
-            self.band.path[i].set_positions(rt)
-
-            # move box and update cartesian coordinates
-            ct  = self.band.path[i].get_cell()
-            ct += np.dot(ct, dR[-3:]) / self.band.jacobian
-            self.band.path[i].set_cell(ct, scale_atoms=True)
+            self.band.image_adapters[i].apply_step(dR, self.band.jacobian)
