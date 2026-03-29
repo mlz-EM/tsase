@@ -13,6 +13,7 @@ from tsase.neb.core.mapping import (
     spatial_map,
 )
 from tsase.neb.core.path import generate_multi_point_path, interpolate_path
+from tsase.neb.core.remesh import uniform_remesh
 from tsase.neb.io.artifacts import RunArtifacts
 from tsase.neb.io.paths import resolve_output_paths
 from tsase.neb.io.restart import load_band_configuration_from_xyz
@@ -28,4 +29,8 @@ from tsase.neb.viz.stem import (
     render_projected_frame,
     save_projected_neb_sequence,
 )
-
+from tsase.neb.workflows.staged import (
+    RemeshStage,
+    StabilizedPerpForce,
+    run_staged_ssneb,
+)

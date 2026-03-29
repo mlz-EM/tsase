@@ -100,10 +100,11 @@ def main(argv=None):
         },
     )
 
+    workflow_artifacts = result["workflow_artifacts"]
     artifacts = result["artifacts"]
-    print(f"Run directory: {artifacts.run_dir}")
-    print(f"Diagnostics: {artifacts.diagnostics_file}")
-    print(f"XYZ output: {artifacts.xyz_dir}")
+    print(f"Run directory: {workflow_artifacts.run_dir}")
+    print(f"Final stage diagnostics: {artifacts.diagnostics_file}")
+    print(f"Final stage XYZ output: {artifacts.xyz_dir}")
     return result
 
 

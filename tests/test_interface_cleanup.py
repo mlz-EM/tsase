@@ -89,7 +89,7 @@ class InterfaceCleanupTests(unittest.TestCase):
                 minimize_kwargs={"forceConverged": 10.0, "maxIterations": 1},
             )
             self.assertTrue(np.allclose(result["field_vector"], np.zeros(3)))
-            self.assertTrue(Path(result["artifacts"].diagnostics_file).exists())
+            self.assertTrue(Path(result["stages"][-1]["artifacts"].diagnostics_file).exists())
 
     def test_restart_reapplies_endpoint_state(self):
         with tempfile.TemporaryDirectory() as tmpdir:

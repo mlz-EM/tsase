@@ -21,8 +21,7 @@ class minimizer_ssneb:
         output_interval=1,
         plot_property=None,
         log_file=None,
-        ci_activation_iteration=None,
-        ci_activation_force=None,
+        image_mobility_rates=None,
     ):
         self.band = band
         self.reporter = getattr(band, "reporter", None)
@@ -46,19 +45,11 @@ class minimizer_ssneb:
                     xyz_dir=Path(self.xyz_dir).expanduser().resolve(),
                     log_file=Path(self.log_file).expanduser().resolve(),
                 )
-            )
+        )
         self.output_interval = max(1, int(output_interval))
         self.plot_property = self._normalize_plot_property(plot_property)
-        self.ci_activation_iteration = ci_activation_iteration
-        self.ci_activation_force = ci_activation_force
-        self._ci_target_method = getattr(self.band, "method", "normal")
-        self._ci_active = self._ci_target_method == "ci"
-        if self._ci_active and (
-            self.ci_activation_iteration is not None
-            or self.ci_activation_force is not None
-        ):
-            self.band.method = "normal"
-            self._ci_active = False
+        self.image_mobility_rates = {}
+        self.set_image_mobility_rates(image_mobility_rates)
 
     def _normalize_plot_property(self, plot_property):
         if plot_property is None:
@@ -117,26 +108,27 @@ class minimizer_ssneb:
             or iteration == max_iterations
         )
 
-    def _maybe_activate_ci(self, iteration, force_max):
-        if self._ci_active or self._ci_target_method != "ci":
-            return False
-        if self.ci_activation_iteration is None and self.ci_activation_force is None:
-            return False
+    def set_image_mobility_rates(self, rates):
+        normalized = {}
+        if rates is None:
+            rates = {}
+        for index, rate in dict(rates).items():
+            image_index = int(index)
+            if image_index <= 0 or image_index >= self.band.numImages - 1:
+                raise ValueError("only intermediate images can have mobility rates")
+            mobility_rate = float(rate)
+            if mobility_rate < 0.0 or mobility_rate > 1.0:
+                raise ValueError("image mobility rates must be within [0.0, 1.0]")
+            normalized[image_index] = mobility_rate
+        self.image_mobility_rates = normalized
+        self.band.frozen_images = {
+            index for index, rate in normalized.items() if rate == 0.0
+        }
+        if hasattr(self.band, "_refresh_band_state"):
+            self.band._refresh_band_state()
 
-        activate = False
-        if self.ci_activation_iteration is not None and iteration >= self.ci_activation_iteration:
-            activate = True
-        if self.ci_activation_force is not None and force_max <= self.ci_activation_force:
-            activate = True
-
-        if not activate:
-            return False
-
-        self.band.method = self._ci_target_method
-        self._ci_active = True
-        if (not self.band.parallel) or (self.band.parallel and self.band.rank == 0):
-            print(f"Climbing image activated at iteration {iteration} (Total Force={force_max:.9g})")
-        return True
+    def get_image_mobility_rate(self, image_index):
+        return float(self.image_mobility_rates.get(int(image_index), 1.0))
 
     def _write_iteration_xyz(self, iteration):
         if self.reporter is None or not self.reporter.is_active:
@@ -203,11 +195,9 @@ class minimizer_ssneb:
         self.reporter.save_energy_plot(fig, iteration)
         plt.close(fig)
 
-    def minimize(self, forceConverged=0.01, maxIterations=1000):
-        fMax = 1e300
-        iterations = 0
+    def _begin_run(self):
         if self.reporter is not None and self.reporter.is_active:
-            status_header = "{:>10} {:>16} {:>16} {:>12} {:>8} {:>16} {:>10} {:>8}".format(
+            self._status_header = "{:>10} {:>16} {:>16} {:>12} {:>8} {:>16} {:>10} {:>8}".format(
                 "Iteration",
                 "Total Force",
                 "Perp Force",
@@ -217,56 +207,66 @@ class minimizer_ssneb:
                 "dt",
                 "Mode",
             )
-            status_separator = "-" * len(status_header)
-            print(status_header)
-            print(status_separator)
-            self.reporter.open_log(status_header, status_separator)
+            self._status_separator = "-" * len(self._status_header)
+            print(self._status_header)
+            print(self._status_separator)
+            self.reporter.open_log(self._status_header, self._status_separator)
         else:
-            status_header = ""
-            status_separator = ""
-        while fMax > forceConverged and iterations < maxIterations:
-            if hasattr(self.band, "update_image_rates"):
-                self.band.update_image_rates(iterations)
-            self.step()
-            fMax = 0.0
-            fPMax = 0.0
-            for i in range(1, self.band.numImages - 1):
-                fi = vmag(self.band.path[i].totalf)
-                fPi = vmag(self.band.path[i].fPerp)
-                if fi > fMax:
-                    fMax = fi
-                if fPi > fPMax:
-                    fPMax = fPi
+            self._status_header = ""
+            self._status_separator = ""
 
-            maxi = self.band.Umaxi
-            cii = getattr(self.band, "CI_index", None)
-            if cii is None:
-                cii = maxi
-            fci = vmag(self.band.path[cii].st)
-            output = "{:10d} {:16.9g} {:16.9g} {:12.9g} {:8d} {:16.9g} {:10.5g} {:>8}".format(
-                iterations + 1,
-                fMax,
-                fPMax,
-                self.band.Umax - self.band.path[0].u,
-                self.band.Umaxi,
-                fci,
-                self.dt,
-                self.band.method,
+    def run_iteration(self, iteration, *, max_iterations, force_converged, convergence_enabled):
+        self.step()
+        force_max = 0.0
+        force_perp_max = 0.0
+        for i in range(1, self.band.numImages - 1):
+            fi = vmag(self.band.path[i].totalf)
+            f_pi = vmag(self.band.path[i].fPerp)
+            if fi > force_max:
+                force_max = fi
+            if f_pi > force_perp_max:
+                force_perp_max = f_pi
+
+        maxi = self.band.Umaxi
+        cii = getattr(self.band, "CI_index", None)
+        if cii is None:
+            cii = maxi
+        ci_stress = vmag(self.band.path[cii].st)
+        converged = convergence_enabled and force_max <= force_converged
+        output = "{:10d} {:16.9g} {:16.9g} {:12.9g} {:8d} {:16.9g} {:10.5g} {:>8}".format(
+            iteration,
+            force_max,
+            force_perp_max,
+            self.band.Umax - self.band.path[0].u,
+            self.band.Umaxi,
+            ci_stress,
+            self.dt,
+            self.band.method,
+        )
+        should_output = self._should_output(iteration, max_iterations, converged)
+        if hasattr(self.band, "write_diagnostics"):
+            self.band.write_diagnostics(iteration)
+        if self.reporter is not None and self.reporter.is_active:
+            self.reporter.write_status_block(
+                self._status_header,
+                output,
+                self._status_separator,
             )
+        if should_output:
+            self._write_iteration_xyz(iteration)
+            self._save_energy_plot(iteration)
+        return {
+            "iteration": int(iteration),
+            "fmax": float(force_max),
+            "fperp_max": float(force_perp_max),
+            "ci_stress": float(ci_stress),
+            "max_energy_index": int(self.band.Umaxi),
+            "max_energy_delta": float(self.band.Umax - self.band.path[0].u),
+            "mode": str(self.band.method),
+            "converged": bool(converged),
+        }
 
-            iteration = iterations + 1
-            should_output = self._should_output(iteration, maxIterations, fMax <= forceConverged)
-            if hasattr(self.band, "write_diagnostics"):
-                self.band.write_diagnostics(iteration)
-            if self.reporter is not None and self.reporter.is_active:
-                self.reporter.write_status_block(status_header, output, status_separator)
-            if should_output:
-                self._write_iteration_xyz(iteration)
-                self._save_energy_plot(iteration)
-
-            self._maybe_activate_ci(iteration, fMax)
-            iterations += 1
-
+    def _finish_run(self):
         if self.reporter is not None and self.reporter.is_active:
             summary_header = "{:>10} {:>16} {:>16} {:>16} {:>10}".format(
                 "Image", "ReCoords", "E", "RealForce", "Image"
@@ -302,3 +302,22 @@ class minimizer_ssneb:
 
         if self.reporter is not None and self.reporter.is_active:
             self.reporter.close()
+
+    def _abort_run(self):
+        if self.reporter is not None and self.reporter.is_active:
+            self.reporter.close()
+
+    def minimize(self, forceConverged=0.01, maxIterations=1000):
+        self._begin_run()
+        iteration = 0
+        while iteration < maxIterations:
+            iteration += 1
+            metrics = self.run_iteration(
+                iteration,
+                max_iterations=maxIterations,
+                force_converged=forceConverged,
+                convergence_enabled=True,
+            )
+            if metrics["converged"]:
+                break
+        self._finish_run()

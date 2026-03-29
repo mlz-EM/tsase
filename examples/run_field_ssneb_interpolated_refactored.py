@@ -99,20 +99,21 @@ def main(argv=None):
         spring=config.spring,
         method=config.method,
         filter_factory=config.filter_factory,
-        adaptive_springs=config.adaptive_springs,
-        kmin=config.kmin,
-        kmax=config.kmax,
-        image_update_schedule=config.image_update_schedule,
+        remesh_stages=config.remesh_stages,
+        image_mobility_rates=config.image_mobility_rates,
+        ci_activation_iteration=config.ci_activation_iteration,
+        ci_activation_force=config.ci_activation_force,
         band_kwargs=config.band_kwargs,
         optimizer_kwargs=config.optimizer_kwargs,
         minimize_kwargs=config.minimize_kwargs,
         script_path=config.script_path,
         manifest_config=config.manifest_config,
     )
+    workflow_artifacts = result["workflow_artifacts"]
     artifacts = result["artifacts"]
-    print(f"Run directory: {artifacts.run_dir}")
-    print(f"Diagnostics: {artifacts.diagnostics_file}")
-    print(f"XYZ output: {artifacts.xyz_dir}")
+    print(f"Run directory: {workflow_artifacts.run_dir}")
+    print(f"Final stage diagnostics: {artifacts.diagnostics_file}")
+    print(f"Final stage XYZ output: {artifacts.xyz_dir}")
     return result
 
 

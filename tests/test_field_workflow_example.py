@@ -24,9 +24,11 @@ class FieldWorkflowExampleTests(unittest.TestCase):
             )
 
             artifacts = result["artifacts"]
+            workflow_artifacts = result["workflow_artifacts"]
             self.assertTrue(Path(artifacts.run_dir).exists())
-            self.assertTrue(Path(artifacts.diagnostics_file).exists())
             self.assertTrue(Path(artifacts.manifest_file).exists())
+            self.assertTrue(Path(workflow_artifacts.run_dir, "workflow_summary.json").exists())
+            self.assertTrue(Path(artifacts.diagnostics_file).exists())
             self.assertTrue(Path(artifacts.xyz_dir, "iter_0000.xyz").exists())
 
     def test_refactored_example_smoke(self):
@@ -46,9 +48,11 @@ class FieldWorkflowExampleTests(unittest.TestCase):
             )
 
             artifacts = result["artifacts"]
+            workflow_artifacts = result["workflow_artifacts"]
             self.assertTrue(Path(artifacts.run_dir).exists())
-            self.assertTrue(Path(artifacts.diagnostics_file).exists())
             self.assertTrue(Path(artifacts.manifest_file).exists())
+            self.assertTrue(Path(workflow_artifacts.run_dir, "workflow_summary.json").exists())
+            self.assertTrue(Path(artifacts.diagnostics_file).exists())
             self.assertTrue(Path(artifacts.xyz_dir, "iter_0000.xyz").exists())
 
 

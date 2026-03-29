@@ -18,7 +18,6 @@ from tsase.neb.viz.stem import save_projected_neb_sequence
 from .geometry import compute_jacobian, image_distance_vector, initialize_image_properties
 from .interfaces import ExecutionContext, ImageEvalResult, PathSpec
 from .mapping import ensure_atom_ids
-from .springs import build_spring_constants
 from .state import stress_to_virial
 from .tangent import energy_weighted_tangent, geometric_tangent
 
@@ -46,17 +45,10 @@ class ssneb:
         filter_factory=None,
         output_dir=None,
         log_file=None,
-        adaptive_springs=False,
-        kmin=None,
-        kmax=None,
-        adaptive_eps=1e-3,
         diagnostics_file=None,
-        image_update_schedule=None,
     ):
         self.numImages = numImages
         self.k = k * numImages
-        self.kmin = (k if kmin is None else kmin) * numImages
-        self.kmax = (k if kmax is None else kmax) * numImages
         self.tangent = tangent
         self.dneb = dneb
         self.dnebOrg = dnebOrg
@@ -66,8 +58,6 @@ class ssneb:
         self.ss = ss
         self.express = express * units.GPa
         self.filter_factory = filter_factory
-        self.adaptive_springs = adaptive_springs
-        self.adaptive_eps = adaptive_eps
         self.context = ExecutionContext.from_parallel_flag(parallel)
         self.parallel = self.context.is_parallel
         self.rank = self.context.rank
@@ -82,8 +72,6 @@ class ssneb:
         self.xyz_dir = str(self.layout.xyz_dir)
         self.diagnostics_file = str(self.layout.diagnostics_file)
         self.log_file = str(self.layout.log_file)
-        self.image_update_schedule = []
-        self.image_update_rates = {}
         self.frozen_images = set()
         self.CI_index = None
         self.reporter = make_reporter(self.context, self.layout)
@@ -117,7 +105,6 @@ class ssneb:
         self.path[0].calc = p1_first.calc
         self.path[n].calc = p2_last.calc
         self.Umaxi = 1
-        self.spring_constants = numpy.full(self.numImages - 1, self.k, dtype=float)
         self.image_filters = []
         self.image_adapters = []
         for image in self.path:
@@ -152,11 +139,7 @@ class ssneb:
             for i in range(1, n):
                 self._apply_image_result(i, self._evaluate_image(i))
                 self._finalize_image_state(i)
-        if image_update_schedule is not None:
-            for entry in image_update_schedule:
-                self.schedule_image_updates(**entry)
-        self._update_spring_constants()
-        self.update_image_rates(0)
+        self._refresh_band_state()
         if self.reporter.is_active:
             self.reporter.initialize_diagnostics()
             if all(hasattr(image, "u") for image in self.path):
@@ -234,54 +217,10 @@ class ssneb:
         self.path[index].u += pv
         self.path[index].enthalpy = self.path[index].u
 
-    def _update_spring_constants(self):
-        self.spring_constants = build_spring_constants(
-            self.path,
-            self.numImages,
-            self.k,
-            adaptive_springs=self.adaptive_springs,
-            kmin=self.kmin,
-            kmax=self.kmax,
-            adaptive_eps=self.adaptive_eps,
-        )
+    def _refresh_band_state(self):
         for i, image in enumerate(self.path):
-            image.k_left = self.spring_constants[i - 1] if i > 0 else 0.0
-            image.k_right = self.spring_constants[i] if i < self.numImages - 1 else 0.0
-        self.CI_index = self._get_ci_index()
-
-    def schedule_image_updates(self, factors, iterations, start_iteration=0):
-        if iterations is None or int(iterations) <= 0:
-            return
-        normalized = {}
-        for index, factor in dict(factors).items():
-            image_index = int(index)
-            if image_index <= 0 or image_index >= self.numImages - 1:
-                raise ValueError("only intermediate images can be scheduled for update scaling")
-            factor = float(factor)
-            if factor < 0.0:
-                raise ValueError("image update factor must be non-negative")
-            normalized[image_index] = factor
-        if not normalized:
-            return
-        self.image_update_schedule.append(
-            {
-                "factors": dict(sorted(normalized.items())),
-                "start_iteration": int(start_iteration),
-                "end_iteration": int(start_iteration) + int(iterations),
-            }
-        )
-
-    def update_image_rates(self, iteration):
-        rates = {index: 1.0 for index in range(1, self.numImages - 1)}
-        for entry in self.image_update_schedule:
-            if entry["start_iteration"] <= int(iteration) < entry["end_iteration"]:
-                for index, factor in entry["factors"].items():
-                    rates[int(index)] = float(factor)
-        self.image_update_rates = rates
-        self.frozen_images = {index for index, factor in rates.items() if factor == 0.0}
-        for index, image in enumerate(self.path):
-            image.update_rate = rates.get(index, 1.0)
-            image.is_frozen = image.update_rate == 0.0
+            image.k_left = self.k if i > 0 else 0.0
+            image.k_right = self.k if i < self.numImages - 1 else 0.0
         self.CI_index = self._get_ci_index()
 
     def _get_ci_index(self):
@@ -317,7 +256,7 @@ class ssneb:
             if i == 1 or self.path[i].u > self.Umax:
                 self.Umax = self.path[i].u
                 self.Umaxi = i
-        self._update_spring_constants()
+        self._refresh_band_state()
 
         for i in range(1, self.numImages - 1):
             self.path[i].totalf = numpy.vstack((self.path[i].f, self.path[i].st / self.jacobian))
@@ -358,12 +297,10 @@ class ssneb:
                 self.path[i].fPerp = self.path[i].totalf - vproj(self.path[i].totalf, self.path[i].n)
                 Rm1 = image_distance_vector(self.path[i - 1], self.path[i])
                 Rp1 = image_distance_vector(self.path[i + 1], self.path[i])
-                km1 = self.spring_constants[i - 1]
-                kp1 = self.spring_constants[i]
-                self.path[i].fsN = (kp1 * vmag(Rp1) - km1 * vmag(Rm1)) * self.path[i].n
+                self.path[i].fsN = self.k * (vmag(Rp1) - vmag(Rm1)) * self.path[i].n
 
                 if self.dneb:
-                    self.path[i].fs = Rp1 * kp1 + Rm1 * km1
+                    self.path[i].fs = self.k * (Rp1 + Rm1)
                     self.path[i].fsperp = self.path[i].fs - vproj(self.path[i].fs, self.path[i].n)
                     self.path[i].fsdneb = self.path[i].fsperp - vproj(self.path[i].fs, self.path[i].fPerp)
                     if not self.dnebOrg:
@@ -378,10 +315,3 @@ class ssneb:
 
                 if self.method == "ci" and self.onlyci:
                     self.path[i].totalf *= 0.0
-
-            rate = float(getattr(self.path[i], "update_rate", 1.0))
-            if rate != 1.0:
-                self.path[i].fPerp *= rate
-                self.path[i].fsN *= rate
-                self.path[i].fsdneb *= rate
-                self.path[i].totalf *= rate
