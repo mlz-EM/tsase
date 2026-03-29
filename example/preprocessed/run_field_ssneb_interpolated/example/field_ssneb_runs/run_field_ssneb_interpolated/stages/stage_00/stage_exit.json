@@ -1,0 +1,21 @@
+{
+  "ci_active": false,
+  "exit_reason": "max_iterations_reached",
+  "follow_up_action": "force_remesh",
+  "is_final_stage": false,
+  "iterations": 200,
+  "metrics": {
+    "ci_stress": 0.9912641622383037,
+    "converged": false,
+    "fmax": 0.10143494472729155,
+    "fperp_max": 0.049164301141306335,
+    "iteration": 200,
+    "max_energy_delta": -0.45471149013610557,
+    "max_energy_index": 3,
+    "mode": "normal",
+    "output_written": true
+  },
+  "num_images": 11,
+  "stage_dir": "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/preprocessed/run_field_ssneb_interpolated/example/field_ssneb_runs/run_field_ssneb_interpolated/stages/stage_00",
+  "stage_index": 0
+}

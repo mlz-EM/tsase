@@ -1,0 +1,50 @@
+{
+  "config": {
+    "force_converged": 0.01,
+    "image_mobility_rates": null,
+    "max_iterations": 200,
+    "num_images": 31,
+    "remesh_stage": {
+      "max_wait_iterations": 200,
+      "on_miss": "force",
+      "target_num_images": 51,
+      "trigger": "StabilizedPerpForce"
+    },
+    "requested_method": "normal",
+    "stage_index": 1
+  },
+  "created_at": "2026-03-29T17:17:51.339526",
+  "hostname": "d-7-5-1",
+  "outputs": {
+    "diagnostics_file": "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/preprocessed/run_field_ssneb_interpolated/example/field_ssneb_runs/run_field_ssneb_interpolated/stages/stage_01/outputs/diagnostics.csv",
+    "energy_dir": "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/preprocessed/run_field_ssneb_interpolated/example/field_ssneb_runs/run_field_ssneb_interpolated/stages/stage_01/outputs/energy",
+    "log_file": "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/preprocessed/run_field_ssneb_interpolated/example/field_ssneb_runs/run_field_ssneb_interpolated/stages/stage_01/outputs/fe.out",
+    "outputs_dir": "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/preprocessed/run_field_ssneb_interpolated/example/field_ssneb_runs/run_field_ssneb_interpolated/stages/stage_01/outputs",
+    "path_dir": "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/preprocessed/run_field_ssneb_interpolated/example/field_ssneb_runs/run_field_ssneb_interpolated/stages/stage_01/outputs/path",
+    "run_dir": "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/preprocessed/run_field_ssneb_interpolated/example/field_ssneb_runs/run_field_ssneb_interpolated/stages/stage_01",
+    "stem_dir": "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/preprocessed/run_field_ssneb_interpolated/example/field_ssneb_runs/run_field_ssneb_interpolated/stages/stage_01/outputs/stem"
+  },
+  "python_executable": "/home/gridsan/mzhu/.conda/envs/NEB/bin/python",
+  "run_directory": "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/preprocessed/run_field_ssneb_interpolated/example/field_ssneb_runs/run_field_ssneb_interpolated/stages/stage_01",
+  "stage_exit": {
+    "ci_active": false,
+    "exit_reason": "remesh_triggered",
+    "follow_up_action": null,
+    "is_final_stage": false,
+    "iterations": 100,
+    "metrics": {
+      "ci_stress": 0.27502899320649077,
+      "converged": false,
+      "fmax": 0.19842298684002718,
+      "fperp_max": 0.12070043368742006,
+      "iteration": 100,
+      "max_energy_delta": -0.33599270752165467,
+      "max_energy_index": 7,
+      "mode": "normal",
+      "output_written": false
+    },
+    "num_images": 31,
+    "stage_dir": "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/preprocessed/run_field_ssneb_interpolated/example/field_ssneb_runs/run_field_ssneb_interpolated/stages/stage_01",
+    "stage_index": 1
+  }
+}

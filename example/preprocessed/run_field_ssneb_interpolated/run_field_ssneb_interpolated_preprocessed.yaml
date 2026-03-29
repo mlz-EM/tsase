@@ -1,20 +1,20 @@
 run:
   name: run_field_ssneb_interpolated
   root: example/field_ssneb_runs/run_field_ssneb_interpolated
-
 path:
   source:
     kind: control_points
     files:
-      - "../../example/Pbam_SC_NC.cif"
-      - "../../example/Cluster#2_SC.cif"
-    indices: [0, 10]
+      - /home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/preprocessed/run_field_ssneb_interpolated/control_point_0000.cif
+      - /home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/preprocessed/run_field_ssneb_interpolated/control_point_0010.cif
+    indices:
+      - 0
+      - 10
   num_images: 11
-
 model:
   calculator:
     kind: mace
-    model_path: "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/MACE_model.model"
+    model_path: /home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/MACE_model.model
     device: cuda
   charges:
     kind: species_map
@@ -24,39 +24,45 @@ model:
       O: -2.0
   field:
     kind: crystal
-    value: [-0.001, 0.0, 0.0]
+    value:
+      - -0.002
+      - 0.0
+      - 0.0
   reference:
     kind: file
-    file: ../../example/Pm-3m.cif
-
+    file: /home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/preprocessed/run_field_ssneb_interpolated/polarization_reference.cif
 band:
   spring: 5.0
-  method: ci
+  method: normal
   ss: true
   weight: 1.0
-
 constraints:
   filter:
     kind: ExpCellFilter
-    mask: [0, 1, 0, 1, 0, 1]
+    mask:
+      - 0
+      - 1
+      - 0
+      - 1
+      - 0
+      - 1
     hydrostatic_strain: false
     constant_volume: false
-
 optimizer:
   kind: fire
-  dt: 0.10
-  dtmax: 0.10
-  maxmove: 0.10
+  dt: 0.1
+  dtmax: 0.1
+  maxmove: 0.1
   output_interval: 200
   convergence:
     fmax: 0.01
     max_steps: 5000
   ci_activation:
     force: 0.5
-
 staging:
   remesh:
-    - target_num_images: 31
+    -
+      target_num_images: 31
       trigger:
         kind: stabilized_perp_force
         min_iterations: 200
@@ -65,16 +71,16 @@ staging:
         plateau_tolerance: 0.05
       max_wait_iterations: 200
       on_miss: force
-    - target_num_images: 51
+    -
+      target_num_images: 51
       trigger:
         kind: stabilized_perp_force
-        min_iterations: 20
+        min_iterations: 100
         relative_drop: 0.3
         window: 5
         plateau_tolerance: 0.05
       max_wait_iterations: 200
       on_miss: force
-
 outputs:
   path_snapshot:
     enabled: true
@@ -88,7 +94,6 @@ outputs:
     plot_property: p_mag
   stem:
     enabled: true
-
 preprocess:
   output_dir: ../../example/preprocessed/run_field_ssneb_interpolated
   relax:

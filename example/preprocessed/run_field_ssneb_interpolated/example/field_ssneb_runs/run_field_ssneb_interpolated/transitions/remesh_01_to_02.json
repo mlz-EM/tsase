@@ -1,0 +1,10 @@
+{
+  "follow_up_action": null,
+  "from_num_images": 31,
+  "from_stage": 1,
+  "json_file": "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/preprocessed/run_field_ssneb_interpolated/example/field_ssneb_runs/run_field_ssneb_interpolated/transitions/remesh_01_to_02.json",
+  "reason": "remesh_triggered",
+  "to_num_images": 51,
+  "to_stage": 2,
+  "xyz_file": "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/preprocessed/run_field_ssneb_interpolated/example/field_ssneb_runs/run_field_ssneb_interpolated/transitions/remesh_01_to_02.xyz"
+}

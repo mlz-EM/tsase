@@ -19,7 +19,7 @@ if str(ROOT) not in sys.path:
 from tsase.neb.workflows import load_field_ssneb_config, run_field_ssneb
 
 
-DEFAULT_CONFIG = ROOT / "examples" / "configs" / "run_field_ssneb_interpolated.yaml"
+DEFAULT_CONFIG = "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/preprocessed/run_field_ssneb_interpolated/run_field_ssneb_interpolated_preprocessed.yaml" #ROOT / "examples" / "configs" / "run_field_ssneb_interpolated.yaml"
 
 
 def parse_args(argv=None):
