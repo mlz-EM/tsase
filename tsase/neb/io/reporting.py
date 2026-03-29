@@ -39,7 +39,13 @@ class Reporter:
         os.makedirs(self.layout.xyz_dir, exist_ok=True)
         outfile = self.layout.xyz_dir / f"iter_{iteration:04d}.xyz"
         io.write(str(outfile), images, format="extxyz")
-        save_projected_neb_sequence(images, xyz_dir=str(self.layout.xyz_dir), iteration=iteration)
+        result = save_projected_neb_sequence(images, xyz_dir=str(self.layout.xyz_dir), iteration=iteration)
+        if isinstance(result, dict) and result.get("status") != "ok":
+            diagnostics_file = result.get("diagnostics_file")
+            print(
+                "Projected STEM visualization skipped for "
+                f"iter_{iteration:04d}; see {diagnostics_file}"
+            )
 
     def save_energy_plot(self, fig, iteration):
         os.makedirs(self.layout.xyz_dir, exist_ok=True)
