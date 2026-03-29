@@ -1,8 +1,27 @@
-from tsase.neb.ssneb import ssneb
-from tsase.neb.pssneb import pssneb
-from tsase.neb.qm_ssneb import qm_ssneb
-from tsase.neb.fire_ssneb import fire_ssneb
-from tsase.neb.ssneb_utils import (compute_jacobian, interpolate_path,
-                                    initialize_image_properties,
-                                    image_distance_vector)
-
+from tsase.neb.legacy.api import (
+    EnthalpyWrapper,
+    NEB_ATOM_ID_ARRAY,
+    ProjectedFrameAnalysis,
+    RunArtifacts,
+    StemAnalysisError,
+    attach_field_charges,
+    analyze_projected_neb_image,
+    build_charge_array,
+    compute_jacobian,
+    crystal_field_to_cartesian,
+    ensure_atom_ids,
+    fire_ssneb,
+    generate_multi_point_path,
+    image_distance_vector,
+    initialize_image_properties,
+    interpolate_path,
+    load_band_configuration_from_xyz,
+    pssneb,
+    qm_ssneb,
+    render_projected_frame,
+    reorder_by_atom_ids,
+    resolve_output_paths,
+    save_projected_neb_sequence,
+    spatial_map,
+    ssneb,
+)
