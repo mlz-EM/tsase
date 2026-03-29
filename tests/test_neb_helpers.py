@@ -45,6 +45,18 @@ class NebHelperTests(unittest.TestCase):
 
         self.assertTrue(np.allclose(reordered.get_positions(), reference.get_positions()))
 
+    def test_generate_multi_point_path_preserves_caller_order_without_ids(self):
+        start = make_atoms([[1.0, 2.0, 2.5], [4.0, 2.0, 2.5]])
+        # This midpoint deliberately swaps the two Cu atoms. The path builder
+        # should preserve the caller-supplied correspondence instead of
+        # silently remapping it by nearest-neighbor geometry.
+        midpoint = make_atoms([[3.7, 2.5, 2.5], [1.3, 2.5, 2.5]])
+        end = make_atoms([[2.0, 3.0, 2.5], [3.0, 3.0, 2.5]])
+
+        path = neb.generate_multi_point_path([start, midpoint, end], [0, 2, 4], 5)
+
+        self.assertTrue(np.allclose(path[2].get_positions(), midpoint.get_positions()))
+
 
 if __name__ == "__main__":
     unittest.main()

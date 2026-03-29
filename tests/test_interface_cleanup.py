@@ -4,10 +4,12 @@ from pathlib import Path
 
 import numpy as np
 from ase import Atoms
+from ase import io
 from ase.calculators.calculator import Calculator, all_changes
 from ase.calculators.emt import EMT
 
 from tsase.neb.core.band import ssneb
+from tsase.neb.io.restart import load_band_configuration_from_xyz
 from tsase.neb.workflows import run_field_ssneb
 
 
@@ -20,6 +22,18 @@ class WorkspaceWritingCalculator(Calculator):
         cwd.joinpath("marker.txt").write_text(str(cwd), encoding="utf-8")
         self.results = {
             "energy": 0.0,
+            "forces": np.zeros((len(atoms), 3), dtype=float),
+        }
+
+
+class PositionEnergyCalculator(Calculator):
+    implemented_properties = ["energy", "forces"]
+
+    def calculate(self, atoms=None, properties=None, system_changes=all_changes):
+        super().calculate(atoms, properties, system_changes)
+        positions = np.asarray(atoms.get_positions(), dtype=float)
+        self.results = {
+            "energy": float(np.sum(positions[:, 0])),
             "forces": np.zeros((len(atoms), 3), dtype=float),
         }
 
@@ -75,6 +89,38 @@ class InterfaceCleanupTests(unittest.TestCase):
             )
             self.assertTrue(np.allclose(result["field_vector"], np.zeros(3)))
             self.assertTrue(Path(result["artifacts"].diagnostics_file).exists())
+
+    def test_restart_reapplies_endpoint_state(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            start = make_atoms(0.0)
+            end = make_atoms(0.5)
+            calc = PositionEnergyCalculator()
+            start.calc = calc
+            end.calc = calc
+            band = ssneb(
+                start,
+                end,
+                numImages=4,
+                output_dir=tmpdir,
+                ss=False,
+            )
+            old_u0 = float(band.path[0].u)
+            old_un = float(band.path[-1].u)
+
+            restart_images = [image.copy() for image in band.path]
+            restart_images[0].positions[:, 0] += 1.0
+            restart_images[-1].positions[:, 0] += 2.0
+            restart_path = Path(tmpdir) / "restart.xyz"
+            io.write(str(restart_path), restart_images, format="extxyz")
+
+            load_band_configuration_from_xyz(band, str(restart_path), remap=False)
+
+            self.assertNotEqual(float(band.path[0].u), old_u0)
+            self.assertNotEqual(float(band.path[-1].u), old_un)
+            self.assertAlmostEqual(float(band.path[0].u), np.sum(restart_images[0].positions[:, 0]))
+            self.assertAlmostEqual(float(band.path[-1].u), np.sum(restart_images[-1].positions[:, 0]))
+            self.assertAlmostEqual(float(band.path[0].base_u), float(band.path[0].u))
+            self.assertAlmostEqual(float(band.path[-1].base_u), float(band.path[-1].u))
 
 
 if __name__ == "__main__":

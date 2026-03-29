@@ -4,7 +4,7 @@ import numpy
 
 from tsase.neb.util import sPBC
 
-from .mapping import ensure_atom_ids, spatial_map
+from .mapping import ensure_atom_ids, reorder_by_atom_ids
 
 
 def _interpolate_segment(p1, p2, num_images):
@@ -59,7 +59,8 @@ def generate_multi_point_path(structures, indices, total_images):
     ensure_atom_ids(reference)
     mapped_structures = [reference.copy()]
     for structure in structures[1:]:
-        mapped_structures.append(spatial_map(reference, structure))
+        reordered = reorder_by_atom_ids(reference, structure)
+        mapped_structures.append(structure.copy() if reordered is None else reordered)
 
     path = []
     for i in range(len(mapped_structures) - 1):
@@ -82,4 +83,3 @@ def interpolate_path(endpoints, indices, num_images):
     if not isinstance(endpoints, (list, tuple)):
         return _interpolate_segment(endpoints, indices, num_images)
     return generate_multi_point_path(endpoints, indices, num_images)
-
