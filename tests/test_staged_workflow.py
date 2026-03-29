@@ -163,6 +163,35 @@ class StagedWorkflowTests(unittest.TestCase):
             self.assertEqual(summary["error"], "stage boom")
             self.assertEqual(stage_exit["exit_reason"], "error")
 
+    def test_stage_exit_always_writes_final_xyz_and_plot_outputs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "stage_outputs"
+            result = neb.run_staged_ssneb(
+                structures=[make_atoms(0.0), make_atoms(0.5)],
+                num_images=5,
+                remesh_stages=[
+                    neb.RemeshStage(
+                        target_num_images=7,
+                        trigger=neb.StabilizedPerpForce(
+                            min_iterations=1,
+                            relative_drop=0.0,
+                            window=1,
+                            plateau_tolerance=0.0,
+                        ),
+                    )
+                ],
+                k=1.5,
+                method="normal",
+                output_dir=output_dir,
+                band_kwargs={"ss": False},
+                optimizer_kwargs={"dt": 0.05, "dtmax": 0.05, "output_interval": 50},
+                minimize_kwargs={"forceConverged": 10.0, "maxIterations": 1},
+            )
+
+            first_stage_artifacts = result["stages"][0]["artifacts"]
+            self.assertTrue((Path(first_stage_artifacts.xyz_dir) / "iter_0001.xyz").exists())
+            self.assertTrue((Path(first_stage_artifacts.xyz_dir) / "energy_iter_0001.png").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

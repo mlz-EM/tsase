@@ -195,6 +195,10 @@ class minimizer_ssneb:
         self.reporter.save_energy_plot(fig, iteration)
         plt.close(fig)
 
+    def ensure_iteration_outputs(self, iteration):
+        self._write_iteration_xyz(iteration)
+        self._save_energy_plot(iteration)
+
     def _begin_run(self):
         if self.reporter is not None and self.reporter.is_active:
             self._status_header = "{:>10} {:>16} {:>16} {:>12} {:>8} {:>16} {:>10} {:>8}".format(
@@ -253,8 +257,7 @@ class minimizer_ssneb:
                 self._status_separator,
             )
         if should_output:
-            self._write_iteration_xyz(iteration)
-            self._save_energy_plot(iteration)
+            self.ensure_iteration_outputs(iteration)
         return {
             "iteration": int(iteration),
             "fmax": float(force_max),
@@ -264,6 +267,7 @@ class minimizer_ssneb:
             "max_energy_delta": float(self.band.Umax - self.band.path[0].u),
             "mode": str(self.band.method),
             "converged": bool(converged),
+            "output_written": bool(should_output),
         }
 
     def _finish_run(self):

@@ -280,6 +280,10 @@ def _run_stage(
     trigger,
     final_convergence_enabled,
 ):
+    def finalize_stage_iteration(metrics):
+        if metrics is not None and not metrics.get("output_written", False):
+            optimizer.ensure_iteration_outputs(metrics["iteration"])
+
     metrics_history = []
     completed_iteration = False
     ci_requested = requested_method == "ci"
@@ -308,6 +312,7 @@ def _run_stage(
                 _activate_ci(band, iteration, metrics["fmax"])
                 ci_active = True
             if trigger is not None and _trigger_fired(trigger, metrics_history):
+                finalize_stage_iteration(metrics)
                 return {
                     "reason": "remesh_triggered",
                     "iterations": int(iteration),
@@ -315,12 +320,14 @@ def _run_stage(
                     "ci_active": ci_active,
                 }
             if final_convergence_enabled and metrics["converged"]:
+                finalize_stage_iteration(metrics)
                 return {
                     "reason": "final_converged",
                     "iterations": int(iteration),
                     "metrics_history": metrics_history,
                     "ci_active": ci_active,
                 }
+        finalize_stage_iteration(metrics_history[-1] if metrics_history else None)
         return {
             "reason": "max_iterations_reached",
             "iterations": int(max_iterations),
