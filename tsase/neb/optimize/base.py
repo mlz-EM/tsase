@@ -25,6 +25,7 @@ class minimizer_ssneb:
         ci_activation_force=None,
     ):
         self.band = band
+        self.reporter = getattr(band, "reporter", None)
         if xyz_dir is None:
             xyz_dir = getattr(band, "xyz_dir", "neb_xyz")
         self.xyz_dir = xyz_dir
@@ -121,38 +122,13 @@ class minimizer_ssneb:
         return True
 
     def _write_iteration_xyz(self, iteration):
-        if self.band.parallel and self.band.rank != 0:
+        if self.reporter is None or not self.reporter.is_active:
             return
-        os.makedirs(self.xyz_dir, exist_ok=True)
-        images = []
-        for i, img in enumerate(self.band.path):
-            snap = img.copy()
-            snap.calc = None
-            snap.info = deepcopy(getattr(img, "info", {}))
-            snap.info.pop("spatial_map_order", None)
-            snap.info["neb_image"] = i
-            if hasattr(img, "u"):
-                try:
-                    snap.info["energy"] = float(img.u)
-                except Exception:
-                    pass
-            if hasattr(img, "polarization_c_per_m2"):
-                try:
-                    snap.info["polarization_c_per_m2"] = [float(value) for value in img.polarization_c_per_m2]
-                except Exception:
-                    pass
-            if hasattr(img, "f"):
-                try:
-                    snap.arrays["forces"] = img.f.copy()
-                except Exception:
-                    pass
-            images.append(snap)
-        outfile = os.path.join(self.xyz_dir, f"iter_{iteration:04d}.xyz")
-        io.write(outfile, images, format="extxyz")
-        save_projected_neb_sequence(images, xyz_dir=self.xyz_dir, iteration=iteration)
+        images = self.reporter.make_snapshot_images(self.band.path)
+        self.reporter.write_iteration_xyz(images, iteration, save_projected_neb_sequence)
 
     def _save_energy_plot(self, iteration):
-        if self.band.parallel and self.band.rank != 0:
+        if self.reporter is None or not self.reporter.is_active:
             return
         try:
             import matplotlib
@@ -208,15 +184,13 @@ class minimizer_ssneb:
             lines.append(line2)
             labels.append(plot_label)
         ax1.legend(lines, labels, loc="best")
-        outfile = os.path.join(self.xyz_dir, f"energy_iter_{iteration:04d}.png")
-        fig.tight_layout()
-        fig.savefig(outfile, dpi=150)
+        self.reporter.save_energy_plot(fig, iteration)
         plt.close(fig)
 
     def minimize(self, forceConverged=0.01, maxIterations=1000):
         fMax = 1e300
         iterations = 0
-        if (not self.band.parallel) or (self.band.parallel and self.band.rank == 0):
+        if self.reporter is not None and self.reporter.is_active:
             status_header = "{:>10} {:>16} {:>16} {:>12} {:>8} {:>16} {:>10} {:>8}".format(
                 "Iteration",
                 "Total Force",
@@ -230,12 +204,10 @@ class minimizer_ssneb:
             status_separator = "-" * len(status_header)
             print(status_header)
             print(status_separator)
-            log_dir = os.path.dirname(self.log_file)
-            if log_dir:
-                os.makedirs(log_dir, exist_ok=True)
-            feout = open(self.log_file, "a")
-            feout.write(status_header + "\n")
-            feout.write(status_separator + "\n")
+            self.reporter.open_log(status_header, status_separator)
+        else:
+            status_header = ""
+            status_separator = ""
         while fMax > forceConverged and iterations < maxIterations:
             if hasattr(self.band, "update_image_rates"):
                 self.band.update_image_rates(iterations)
@@ -270,14 +242,8 @@ class minimizer_ssneb:
             should_output = self._should_output(iteration, maxIterations, fMax <= forceConverged)
             if hasattr(self.band, "write_diagnostics"):
                 self.band.write_diagnostics(iteration)
-            if (not self.band.parallel) or (self.band.parallel and self.band.rank == 0):
-                print("-------------------------SSNEB------------------------------")
-                print(status_header)
-                print(output)
-                print(status_separator)
-                feout.write(status_header + "\n")
-                feout.write(output + "\n")
-                feout.write(status_separator + "\n")
+            if self.reporter is not None and self.reporter.is_active:
+                self.reporter.write_status_block(status_header, output, status_separator)
             if should_output:
                 self._write_iteration_xyz(iteration)
                 self._save_energy_plot(iteration)
@@ -285,17 +251,12 @@ class minimizer_ssneb:
             self._maybe_activate_ci(iteration, fMax)
             iterations += 1
 
-        if (not self.band.parallel) or (self.band.parallel and self.band.rank == 0):
+        if self.reporter is not None and self.reporter.is_active:
             summary_header = "{:>10} {:>16} {:>16} {:>16} {:>10}".format(
                 "Image", "ReCoords", "E", "RealForce", "Image"
             )
             summary_separator = "-" * len(summary_header)
-            print("-----------------------SSNEB Finished------------------------------")
-            print(summary_header)
-            print(summary_separator)
-            feout.write("-----------------------SSNEB Finished------------------------------\n")
-            feout.write(summary_header + "\n")
-            feout.write(summary_separator + "\n")
+            self.reporter.write_summary_header(summary_header, summary_separator)
         for i in range(self.band.numImages):
             if i == 0:
                 Rm1 = 0.0
@@ -321,9 +282,7 @@ class minimizer_ssneb:
                     float(realtotalf),
                     i,
                 )
-                print(line)
-                feout.write(line + "\n")
+                self.reporter.write_summary_line(line)
 
-        if (not self.band.parallel) or (self.band.parallel and self.band.rank == 0):
-            feout.close()
-
+        if self.reporter is not None and self.reporter.is_active:
+            self.reporter.close()

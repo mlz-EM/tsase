@@ -11,7 +11,7 @@ from pathlib import Path
 
 from ase.io import write
 
-from .paths import resolve_output_paths
+from .paths import RunLayout, resolve_output_paths
 
 
 def _sha256sum(path):
@@ -58,17 +58,17 @@ class RunArtifacts:
         log_file=None,
         manifest_name="run_manifest.json",
     ):
-        paths = resolve_output_paths(
+        self.layout = RunLayout.from_inputs(
             output_dir=run_dir,
             xyz_dir=xyz_dir,
             diagnostics_file=diagnostics_file,
             log_file=log_file,
         )
-        self.run_dir = Path(run_dir).expanduser().resolve()
-        self.output_dir = self.run_dir
-        self.xyz_dir = Path(paths["xyz_dir"])
-        self.diagnostics_file = Path(paths["diagnostics_file"])
-        self.log_file = Path(paths["log_file"])
+        self.run_dir = self.layout.run_dir
+        self.output_dir = self.layout.public_dir
+        self.xyz_dir = self.layout.xyz_dir
+        self.diagnostics_file = self.layout.diagnostics_file
+        self.log_file = self.layout.log_file
         self.manifest_file = self.run_dir / manifest_name
 
     @classmethod
@@ -111,7 +111,7 @@ class RunArtifacts:
         }
 
     def copy_inputs(self, files, subdir="inputs"):
-        destination_dir = self.run_dir / subdir
+        destination_dir = self.layout.inputs_dir if subdir == "inputs" else self.run_dir / subdir
         destination_dir.mkdir(parents=True, exist_ok=True)
         records = []
 
@@ -149,7 +149,11 @@ class RunArtifacts:
         prefix="image",
         format="extxyz",
     ):
-        destination_dir = self.run_dir / subdir
+        destination_dir = (
+            self.layout.prepared_structures_dir
+            if subdir == "prepared_structures"
+            else self.run_dir / subdir
+        )
         destination_dir.mkdir(parents=True, exist_ok=True)
         output_paths = []
         for offset, atoms in enumerate(structures):
@@ -195,4 +199,3 @@ class RunArtifacts:
         with self.manifest_file.open("w", encoding="utf-8") as handle:
             json.dump(manifest, handle, indent=2, sort_keys=True)
         return str(self.manifest_file)
-

@@ -2,14 +2,14 @@
 
 from pathlib import Path
 
-from ase import io
-
 from tsase.neb.core.mapping import spatial_map
 from tsase.neb.io.artifacts import RunArtifacts
 from tsase.neb.io.restart import load_band_configuration_from_xyz
 from tsase.neb.models.charges import attach_field_charges, build_charge_array
-from tsase.neb.models.field import EnthalpyWrapper, crystal_field_to_cartesian
+from tsase.neb.models.field import EnthalpyWrapper
 from tsase.neb.optimize.fire import fire_ssneb
+
+from .config import FieldSSNEBConfig
 
 
 def prepare_field_images(structures, charge_map, calculator):
@@ -49,62 +49,77 @@ def run_field_ssneb(
     manifest_config=None,
 ):
     """Prepare and run a field-coupled SSNEB optimization."""
-    run_dir = Path("field_ssneb_runs") if run_dir is None else Path(run_dir)
-    artifacts = RunArtifacts.create(base_dir=run_dir.parent, run_name=run_dir.name, timestamp=False)
-    prepared = prepare_field_images(structures, charge_map, calculator)
-    polarization_reference = prepared[0] if reference_atoms is None else spatial_map(prepared[0], reference_atoms)
-    field_vector = (
-        crystal_field_to_cartesian(prepared[0].get_cell(), field_crystal)
-        if field_crystal is not None
-        else field
+    config = FieldSSNEBConfig.from_inputs(
+        structures=structures,
+        structure_indices=structure_indices,
+        num_images=num_images,
+        calculator=calculator,
+        charge_map=charge_map,
+        field=field,
+        field_crystal=field_crystal,
+        reference_atoms=reference_atoms,
+        run_dir=run_dir,
+        restart_xyz=restart_xyz,
+        spring=spring,
+        method=method,
+        filter_factory=filter_factory,
+        adaptive_springs=adaptive_springs,
+        kmin=kmin,
+        kmax=kmax,
+        image_update_schedule=image_update_schedule,
+        band_kwargs=band_kwargs,
+        optimizer_kwargs=optimizer_kwargs,
+        minimize_kwargs=minimize_kwargs,
+        script_path=script_path,
+        manifest_config=manifest_config,
     )
+    artifacts = RunArtifacts.create(base_dir=config.run_dir.parent, run_name=config.run_dir.name, timestamp=False)
+    prepared = prepare_field_images(config.structures, config.charge_map, config.calculator)
+    polarization_reference = spatial_map(prepared[0], config.reference_atoms)
     wrapped_calc = EnthalpyWrapper(
-        calculator,
-        field=field_vector,
+        config.calculator,
+        field=config.field_vector,
         reference_atoms=polarization_reference,
-        charges=build_charge_array(prepared[0], charge_map=charge_map),
+        charges=build_charge_array(prepared[0], charge_map=config.charge_map),
     )
     for atoms in prepared:
         atoms.calc = wrapped_calc
 
     from tsase.neb.core.band import ssneb
 
-    band_options = {} if band_kwargs is None else dict(band_kwargs)
     band = ssneb(
         prepared,
-        structure_indices,
-        numImages=num_images,
-        k=spring,
-        method=method,
+        config.structure_indices,
+        numImages=config.num_images,
+        k=config.spring,
+        method=config.method,
         output_dir=str(artifacts.output_dir),
-        filter_factory=filter_factory,
-        adaptive_springs=adaptive_springs,
-        kmin=kmin,
-        kmax=kmax,
-        image_update_schedule=image_update_schedule,
-        **band_options,
+        filter_factory=config.filter_factory,
+        adaptive_springs=config.adaptive_springs,
+        kmin=config.kmin,
+        kmax=config.kmax,
+        image_update_schedule=config.image_update_schedule,
+        **config.band_kwargs,
     )
-    if restart_xyz is not None:
-        load_band_configuration_from_xyz(band, str(restart_xyz))
+    if config.restart_xyz is not None:
+        load_band_configuration_from_xyz(band, str(config.restart_xyz))
 
-    optimizer_kwargs = {} if optimizer_kwargs is None else dict(optimizer_kwargs)
-    minimize_kwargs = {} if minimize_kwargs is None else dict(minimize_kwargs)
-    optimizer = fire_ssneb(band, **optimizer_kwargs)
-    optimizer.minimize(**minimize_kwargs)
+    optimizer = fire_ssneb(band, **config.optimizer_kwargs)
+    optimizer.minimize(**config.minimize_kwargs)
 
-    prepared_paths = artifacts.write_structures(prepared, indices=structure_indices)
-    if script_path is not None:
-        artifacts.snapshot_script(script_path)
+    prepared_paths = artifacts.write_structures(prepared, indices=config.structure_indices)
+    if config.script_path is not None:
+        artifacts.snapshot_script(config.script_path)
     artifacts.write_manifest(
-        script_path=script_path,
-        config=manifest_config,
+        script_path=config.script_path,
+        config=config.manifest_config,
         prepared_structures=prepared_paths,
     )
     return {
         "artifacts": artifacts,
         "band": band,
         "optimizer": optimizer,
-        "field_vector": field_vector,
+        "field_vector": config.field_vector,
         "prepared_structures": prepared,
+        "config": config,
     }
-

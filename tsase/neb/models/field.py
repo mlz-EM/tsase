@@ -14,6 +14,20 @@ from .charges import build_charge_array
 POLARIZATION_E_A2_TO_C_M2 = 16.02176634
 
 
+def resolve_field_vector(cell, field=None, field_crystal=None):
+    """Resolve cartesian field input and guarantee a zero-vector default."""
+    if field is not None and field_crystal is not None:
+        raise ValueError("field and field_crystal are mutually exclusive")
+    if field_crystal is not None:
+        return crystal_field_to_cartesian(cell, field_crystal)
+    if field is None:
+        return np.zeros(3, dtype=float)
+    field = np.array(field, dtype=float)
+    if field.shape != (3,):
+        raise ValueError("field must contain exactly 3 components")
+    return field
+
+
 def crystal_field_to_cartesian(cell, field_crystal):
     """Convert field components given in lattice-axis coordinates to Cartesian."""
     field_crystal = np.array(field_crystal, dtype=float)
@@ -138,4 +152,3 @@ class EnthalpyWrapper(Calculator):
             if self.include_field_stress:
                 total_stress_matrix += stress_field
             self.results["stress"] = full_3x3_to_voigt_6_stress(total_stress_matrix)
-
