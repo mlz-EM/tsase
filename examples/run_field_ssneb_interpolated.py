@@ -99,6 +99,7 @@ def validate_ssneb_cell_orientation(atoms, label):
 def main():
     MACECalculator = load_mace_calculator()
     run_dir = RUNS_DIR / Path(__file__).stem
+    run_dir.mkdir(parents=True, exist_ok=True)
     polarization_reference_path = run_dir / "polarization_reference.cif"
 
     structure_indices = sorted(STRUCTURE_POINTS)

@@ -303,6 +303,10 @@ class minimizer_ssneb:
         if self.reporter is not None and self.reporter.is_active:
             self.reporter.close()
 
+    def _abort_run(self):
+        if self.reporter is not None and self.reporter.is_active:
+            self.reporter.close()
+
     def minimize(self, forceConverged=0.01, maxIterations=1000):
         self._begin_run()
         iteration = 0

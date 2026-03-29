@@ -21,6 +21,26 @@ class ZeroForceCalculator(Calculator):
         }
 
 
+class FailAfterNCallsCalculator(Calculator):
+    implemented_properties = ["energy", "forces"]
+
+    def __init__(self, fail_after, message):
+        super().__init__()
+        self.fail_after = int(fail_after)
+        self.message = str(message)
+        self.call_count = 0
+
+    def calculate(self, atoms=None, properties=None, system_changes=all_changes):
+        self.call_count += 1
+        if self.call_count > self.fail_after:
+            raise RuntimeError(self.message)
+        super().calculate(atoms, properties, system_changes)
+        self.results = {
+            "energy": 0.0,
+            "forces": np.zeros((len(atoms), 3), dtype=float),
+        }
+
+
 def make_atoms(shift):
     atoms = Atoms(
         "Cu2",
@@ -102,6 +122,38 @@ class StagedWorkflowTests(unittest.TestCase):
             with (output_dir / "workflow_summary.json").open("r", encoding="utf-8") as handle:
                 summary = json.load(handle)
             self.assertEqual(summary["outcome"], "completed")
+
+    def test_stage_runtime_failure_is_re_raised_with_original_context(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "failing_stage"
+            calculator = FailAfterNCallsCalculator(
+                fail_after=5,
+                message="stage boom",
+            )
+            start = make_atoms(0.0)
+            end = make_atoms(0.5)
+            start.calc = calculator
+            end.calc = calculator
+
+            with self.assertRaisesRegex(RuntimeError, "stage boom"):
+                neb.run_staged_ssneb(
+                    structures=[start, end],
+                    num_images=5,
+                    k=1.5,
+                    method="normal",
+                    output_dir=output_dir,
+                    band_kwargs={"ss": False},
+                    optimizer_kwargs={"dt": 0.05, "dtmax": 0.05, "output_interval": 1},
+                    minimize_kwargs={"forceConverged": 10.0, "maxIterations": 1},
+                )
+
+            with (output_dir / "workflow_summary.json").open("r", encoding="utf-8") as handle:
+                summary = json.load(handle)
+            with (output_dir / "stage_00" / "stage_exit.json").open("r", encoding="utf-8") as handle:
+                stage_exit = json.load(handle)
+            self.assertEqual(summary["outcome"], "failed")
+            self.assertEqual(summary["error"], "stage boom")
+            self.assertEqual(stage_exit["exit_reason"], "error")
 
 
 if __name__ == "__main__":
