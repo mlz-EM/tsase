@@ -1,72 +1,69 @@
 run:
   name: run_field_ssneb_interpolated
-  root: examples/runs/run_field_ssneb_interpolated
+  root: example/field_ssneb_runs/run_field_ssneb_interpolated
 
 path:
   source:
     kind: control_points
     files:
-      - ../structures/cu_start.extxyz
-      - ../structures/cu_mid.extxyz
-      - ../structures/cu_end.extxyz
-    indices: [0, 2, 4]
-  num_images: 5
+      - ../../example/Pbam_SC_NC.cif
+      - ../../example/Cluster#2_SC.cif
+    indices: [0, 26]
+  num_images: 27
 
 model:
   calculator:
-    kind: emt
+    kind: mace
+    model_path: ../../example/MACE_model.model
+    device: cuda
   charges:
-    kind: array
-    values: [1.0, -1.0]
+    kind: species_map
+    values:
+      Pb: 2.0
+      Zr: 4.0
+      O: -2.0
   field:
-    kind: cartesian
-    value: [0.03, 0.0, 0.0]
+    kind: crystal
+    value: [-0.001, 0.0, 0.0]
   reference:
-    kind: first_structure
+    kind: file
+    file: ../../example/Pm-3m.cif
 
 band:
-  spring: 1.5
-  method: normal
-  ss: false
+  spring: 5.0
+  method: ci
+  ss: true
   weight: 1.0
 
 constraints:
   filter:
-    kind: none
+    kind: ExpCellFilter
+    mask: [0, 1, 0, 1, 0, 1]
+    hydrostatic_strain: false
+    constant_volume: false
 
 optimizer:
   kind: fire
-  dt: 0.05
-  dtmax: 0.05
-  maxmove: 0.05
-  output_interval: 1
-  plot_property: px
+  dt: 0.10
+  dtmax: 0.10
+  maxmove: 0.10
+  output_interval: 200
+  plot_property: p_mag
   convergence:
-    fmax: 0.2
-    max_steps: 3
-
-staging:
-  remesh:
-    -
-      target_num_images: 7
-      trigger:
-        kind: stabilized_perp_force
-        min_iterations: 1
-        relative_drop: 0.0
-        window: 1
-        plateau_tolerance: 0.0
-      max_wait_iterations: 1
-      on_miss: force
+    fmax: 0.01
+    max_steps: 5000
+  ci_activation:
+    force: 0.5
 
 outputs:
   path_snapshot:
     enabled: true
     schedule:
-      every: 1
+      every: 200
       include_final: true
   diagnostics:
     enabled: true
   energy_profile:
     enabled: true
   stem:
-    enabled: false
+    enabled: true

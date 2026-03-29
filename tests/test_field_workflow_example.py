@@ -9,8 +9,11 @@ class FieldWorkflowExampleTests(unittest.TestCase):
     def test_example_smoke(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir) / "field_example"
+            smoke_config = Path(__file__).resolve().parents[1] / "examples" / "configs" / "run_field_ssneb_interpolated_smoke.yaml"
             result = main(
                 [
+                    "--config",
+                    str(smoke_config),
                     "--output-dir",
                     str(output_dir),
                     "--max-steps",
