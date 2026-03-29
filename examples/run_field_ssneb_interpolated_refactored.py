@@ -99,10 +99,10 @@ def main(argv=None):
         spring=config.spring,
         method=config.method,
         filter_factory=config.filter_factory,
-        adaptive_springs=config.adaptive_springs,
-        kmin=config.kmin,
-        kmax=config.kmax,
-        image_update_schedule=config.image_update_schedule,
+        remesh_stages=config.remesh_stages,
+        image_mobility_rates=config.image_mobility_rates,
+        ci_activation_iteration=config.ci_activation_iteration,
+        ci_activation_force=config.ci_activation_force,
         band_kwargs=config.band_kwargs,
         optimizer_kwargs=config.optimizer_kwargs,
         minimize_kwargs=config.minimize_kwargs,
@@ -110,9 +110,10 @@ def main(argv=None):
         manifest_config=config.manifest_config,
     )
     artifacts = result["artifacts"]
+    final_stage = result["stages"][-1]["artifacts"]
     print(f"Run directory: {artifacts.run_dir}")
-    print(f"Diagnostics: {artifacts.diagnostics_file}")
-    print(f"XYZ output: {artifacts.xyz_dir}")
+    print(f"Final stage diagnostics: {final_stage.diagnostics_file}")
+    print(f"Final stage XYZ output: {final_stage.xyz_dir}")
     return result
 
 

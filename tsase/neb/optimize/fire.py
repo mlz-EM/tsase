@@ -23,8 +23,7 @@ class fire_ssneb(minimizer_ssneb):
         output_interval=1,
         plot_property=None,
         log_file=None,
-        ci_activation_iteration=None,
-        ci_activation_force=None,
+        image_mobility_rates=None,
     ):
         minimizer_ssneb.__init__(
             self,
@@ -33,8 +32,7 @@ class fire_ssneb(minimizer_ssneb):
             output_interval=output_interval,
             plot_property=plot_property,
             log_file=log_file,
-            ci_activation_iteration=ci_activation_iteration,
-            ci_activation_force=ci_activation_force,
+            image_mobility_rates=image_mobility_rates,
         )
         self.maxmove = maxmove
         self.dt = dt
@@ -55,7 +53,7 @@ class fire_ssneb(minimizer_ssneb):
         self.band.forces()
         totalf = self.v.copy()
         for i in range(1, self.band.numImages - 1):
-            totalf[i - 1] = self.band.path[i].totalf
+            totalf[i - 1] = self.get_image_mobility_rate(i) * self.band.path[i].totalf
         Power = vdot(totalf, self.v)
 
         if Power > 0.0:
@@ -77,4 +75,3 @@ class fire_ssneb(minimizer_ssneb):
             if vmag(dR) > self.maxmove:
                 dR = self.maxmove * vunit(dR)
             self.band.image_adapters[i].apply_step(dR, self.band.jacobian)
-

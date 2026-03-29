@@ -23,10 +23,10 @@ class FieldSSNEBConfig:
     spring: float = 5.0
     method: str = "ci"
     filter_factory: object = None
-    adaptive_springs: bool = False
-    kmin: Optional[float] = None
-    kmax: Optional[float] = None
-    image_update_schedule: object = None
+    remesh_stages: object = None
+    image_mobility_rates: object = None
+    ci_activation_iteration: Optional[int] = None
+    ci_activation_force: Optional[float] = None
     band_kwargs: dict = field(default_factory=dict)
     optimizer_kwargs: dict = field(default_factory=dict)
     minimize_kwargs: dict = field(default_factory=dict)
@@ -50,10 +50,10 @@ class FieldSSNEBConfig:
         spring=5.0,
         method="ci",
         filter_factory=None,
-        adaptive_springs=False,
-        kmin=None,
-        kmax=None,
-        image_update_schedule=None,
+        remesh_stages=None,
+        image_mobility_rates=None,
+        ci_activation_iteration=None,
+        ci_activation_force=None,
         band_kwargs=None,
         optimizer_kwargs=None,
         minimize_kwargs=None,
@@ -76,10 +76,10 @@ class FieldSSNEBConfig:
             spring=spring,
             method=method,
             filter_factory=filter_factory,
-            adaptive_springs=adaptive_springs,
-            kmin=kmin,
-            kmax=kmax,
-            image_update_schedule=image_update_schedule,
+            remesh_stages=remesh_stages,
+            image_mobility_rates=image_mobility_rates,
+            ci_activation_iteration=ci_activation_iteration,
+            ci_activation_force=ci_activation_force,
             band_kwargs={} if band_kwargs is None else dict(band_kwargs),
             optimizer_kwargs={} if optimizer_kwargs is None else dict(optimizer_kwargs),
             minimize_kwargs={} if minimize_kwargs is None else dict(minimize_kwargs),

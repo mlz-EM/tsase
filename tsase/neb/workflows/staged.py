@@ -1,0 +1,466 @@
+"""Public staged SSNEB workflow helpers."""
+
+from dataclasses import dataclass
+import json
+from pathlib import Path
+from typing import Optional
+
+from ase.io import write
+
+from tsase.neb.core.remesh import uniform_remesh
+from tsase.neb.io.artifacts import RunArtifacts
+from tsase.neb.optimize.fire import fire_ssneb
+
+
+@dataclass(frozen=True)
+class RemeshStage:
+    """One requested remeshing transition in a staged SSNEB run."""
+
+    target_num_images: int
+    trigger: object
+    max_wait_iterations: Optional[int] = None
+    on_miss: str = "force"
+
+    def __post_init__(self):
+        if int(self.target_num_images) < 2:
+            raise ValueError("target_num_images must be at least 2")
+        if self.on_miss not in {"force", "skip", "error"}:
+            raise ValueError("on_miss must be one of: force, skip, error")
+        if self.max_wait_iterations is not None and int(self.max_wait_iterations) <= 0:
+            raise ValueError("max_wait_iterations must be positive when provided")
+
+
+@dataclass(frozen=True)
+class StabilizedPerpForce:
+    """Trigger remeshing once the perpendicular force has dropped and plateaued."""
+
+    min_iterations: int = 20
+    relative_drop: float = 0.3
+    window: int = 5
+    plateau_tolerance: float = 0.05
+
+    def __post_init__(self):
+        if int(self.min_iterations) <= 0:
+            raise ValueError("min_iterations must be positive")
+        if not 0.0 <= float(self.relative_drop) <= 1.0:
+            raise ValueError("relative_drop must be within [0.0, 1.0]")
+        if int(self.window) <= 0:
+            raise ValueError("window must be positive")
+        if float(self.plateau_tolerance) < 0.0:
+            raise ValueError("plateau_tolerance must be non-negative")
+
+    def is_triggered(self, history):
+        if len(history) < max(self.min_iterations, self.window):
+            return False
+        baseline = max(entry["fperp_max"] for entry in history[: self.min_iterations])
+        current = history[-1]["fperp_max"]
+        if baseline <= 0.0:
+            return True
+        if current > baseline * (1.0 - self.relative_drop):
+            return False
+        recent = [entry["fperp_max"] for entry in history[-self.window :]]
+        plateau_span = max(recent) - min(recent)
+        return plateau_span <= self.plateau_tolerance * max(current, 1.0e-12)
+
+
+def _write_json(path, payload):
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+
+
+def _copy_images_with_calculators(images):
+    copied = []
+    for image in images:
+        snapshot = image.copy()
+        snapshot.calc = image.calc
+        copied.append(snapshot)
+    return copied
+
+
+def _normalize_structure_indices(structures, structure_indices, num_images):
+    if structure_indices is not None:
+        return list(structure_indices)
+    if len(structures) == 2:
+        return [0, int(num_images) - 1]
+    if len(structures) == int(num_images):
+        return list(range(int(num_images)))
+    raise ValueError("structure_indices are required when structures do not already span the full path")
+
+
+def _normalize_remesh_stages(remesh_stages):
+    if remesh_stages is None:
+        return []
+    return [stage if isinstance(stage, RemeshStage) else RemeshStage(**stage) for stage in remesh_stages]
+
+
+def _should_activate_ci(iteration, metrics, ci_activation_iteration, ci_activation_force):
+    if ci_activation_iteration is None and ci_activation_force is None:
+        return True
+    if ci_activation_iteration is not None and int(iteration) >= int(ci_activation_iteration):
+        return True
+    if ci_activation_force is not None and float(metrics["fmax"]) <= float(ci_activation_force):
+        return True
+    return False
+
+
+def _trigger_fired(trigger, history):
+    if trigger is None:
+        return False
+    if hasattr(trigger, "is_triggered"):
+        return bool(trigger.is_triggered(history))
+    return bool(trigger(history))
+
+
+def _activate_ci(band, iteration, force_max):
+    band.method = "ci"
+    if hasattr(band, "_refresh_band_state"):
+        band._refresh_band_state()
+    if (not band.parallel) or (band.parallel and band.rank == 0):
+        print(f"Climbing image activated at iteration {iteration} (Total Force={force_max:.9g})")
+
+
+def _run_stage(
+    *,
+    band,
+    optimizer,
+    max_iterations,
+    force_converged,
+    requested_method,
+    ci_activation_iteration,
+    ci_activation_force,
+    trigger,
+    final_convergence_enabled,
+):
+    metrics_history = []
+    ci_requested = requested_method == "ci"
+    ci_active = ci_requested and ci_activation_iteration is None and ci_activation_force is None
+    band.method = "ci" if ci_active else "normal" if ci_requested else requested_method
+    if hasattr(band, "_refresh_band_state"):
+        band._refresh_band_state()
+
+    optimizer._begin_run()
+    try:
+        for iteration in range(1, int(max_iterations) + 1):
+            metrics = optimizer.run_iteration(
+                iteration,
+                max_iterations=int(max_iterations),
+                force_converged=float(force_converged),
+                convergence_enabled=bool(final_convergence_enabled),
+            )
+            metrics_history.append(metrics)
+            if ci_requested and not ci_active and _should_activate_ci(
+                iteration,
+                metrics,
+                ci_activation_iteration,
+                ci_activation_force,
+            ):
+                _activate_ci(band, iteration, metrics["fmax"])
+                ci_active = True
+            if trigger is not None and _trigger_fired(trigger, metrics_history):
+                return {
+                    "reason": "remesh_triggered",
+                    "iterations": int(iteration),
+                    "metrics_history": metrics_history,
+                    "ci_active": ci_active,
+                }
+            if final_convergence_enabled and metrics["converged"]:
+                return {
+                    "reason": "final_converged",
+                    "iterations": int(iteration),
+                    "metrics_history": metrics_history,
+                    "ci_active": ci_active,
+                }
+        return {
+            "reason": "max_iterations_reached",
+            "iterations": int(max_iterations),
+            "metrics_history": metrics_history,
+            "ci_active": ci_active,
+        }
+    finally:
+        optimizer._finish_run()
+
+
+def run_staged_ssneb(
+    *,
+    structures,
+    structure_indices=None,
+    num_images,
+    remesh_stages=None,
+    restart_xyz=None,
+    k=5.0,
+    method="ci",
+    filter_factory=None,
+    output_dir=None,
+    band_kwargs=None,
+    optimizer_kwargs=None,
+    minimize_kwargs=None,
+    image_mobility_rates=None,
+    ci_activation_iteration=None,
+    ci_activation_force=None,
+    script_path=None,
+    manifest_config=None,
+    git_cwd=None,
+):
+    """Run SSNEB as one or more conservative stages with optional remeshing."""
+    from tsase.neb.core.band import ssneb
+    from tsase.neb.io.restart import load_band_configuration_from_xyz
+
+    structures = list(structures)
+    remesh_plan = _normalize_remesh_stages(remesh_stages)
+    indices = _normalize_structure_indices(structures, structure_indices, num_images)
+    band_options = {} if band_kwargs is None else dict(band_kwargs)
+    optimizer_options = {} if optimizer_kwargs is None else dict(optimizer_kwargs)
+    minimize_options = {} if minimize_kwargs is None else dict(minimize_kwargs)
+    force_converged = float(minimize_options.get("forceConverged", 0.01))
+    max_iterations = int(minimize_options.get("maxIterations", 1000))
+    stage_weight = float(band_options.get("weight", 1.0))
+
+    if output_dir is None:
+        workflow_artifacts = RunArtifacts.create(
+            base_dir="neb_runs",
+            run_name="staged_ssneb",
+            timestamp=True,
+        )
+        workflow_artifacts.manifest_file = workflow_artifacts.run_dir / "workflow_manifest.json"
+    else:
+        workflow_dir = Path(output_dir).expanduser().resolve()
+        workflow_dir.mkdir(parents=True, exist_ok=True)
+        workflow_artifacts = RunArtifacts(
+            workflow_dir,
+            manifest_name="workflow_manifest.json",
+        )
+
+    transitions_dir = workflow_artifacts.run_dir / "transitions"
+    transitions_dir.mkdir(parents=True, exist_ok=True)
+    initial_inputs = workflow_artifacts.write_structures(
+        structures,
+        indices=indices,
+        subdir="initial_inputs",
+    )
+    if script_path is not None:
+        workflow_artifacts.snapshot_script(script_path)
+
+    current_structures = _copy_images_with_calculators(structures)
+    current_indices = list(indices)
+    current_num_images = int(num_images)
+    executed_stages = []
+    transition_records = []
+    final_band = None
+    final_optimizer = None
+    outcome = "completed"
+    error_message = None
+
+    total_stage_count = len(remesh_plan) + 1
+    for stage_index in range(total_stage_count):
+        is_final_stage = stage_index == total_stage_count - 1
+        remesh_stage = None if is_final_stage else remesh_plan[stage_index]
+        stage_dir = workflow_artifacts.run_dir / f"stage_{stage_index:02d}"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        stage_artifacts = RunArtifacts(stage_dir)
+
+        stage_method = method if is_final_stage else "normal"
+        band = ssneb(
+            current_structures,
+            current_indices,
+            numImages=current_num_images,
+            k=k,
+            method=stage_method,
+            output_dir=str(stage_artifacts.run_dir),
+            filter_factory=filter_factory,
+            **band_options,
+        )
+        if stage_index == 0 and restart_xyz is not None:
+            load_band_configuration_from_xyz(band, str(restart_xyz))
+
+        optimizer = fire_ssneb(
+            band,
+            image_mobility_rates=image_mobility_rates,
+            **optimizer_options,
+        )
+        stage_input_paths = stage_artifacts.write_structures(
+            [image.copy() for image in band.path],
+            indices=list(range(band.numImages)),
+        )
+
+        try:
+            stage_result = _run_stage(
+                band=band,
+                optimizer=optimizer,
+                max_iterations=max_iterations if remesh_stage is None or remesh_stage.max_wait_iterations is None else remesh_stage.max_wait_iterations,
+                force_converged=force_converged,
+                requested_method=method if is_final_stage else "normal",
+                ci_activation_iteration=ci_activation_iteration if is_final_stage else None,
+                ci_activation_force=ci_activation_force if is_final_stage else None,
+                trigger=None if is_final_stage else remesh_stage.trigger,
+                final_convergence_enabled=is_final_stage,
+            )
+        except Exception as exc:
+            stage_result = {
+                "reason": "error",
+                "iterations": 0,
+                "metrics_history": [],
+                "ci_active": False,
+            }
+            outcome = "failed"
+            error_message = str(exc)
+
+        last_metrics = (
+            None if not stage_result["metrics_history"] else stage_result["metrics_history"][-1]
+        )
+        stage_record = {
+            "stage_index": int(stage_index),
+            "stage_dir": str(stage_artifacts.run_dir),
+            "num_images": int(band.numImages),
+            "is_final_stage": bool(is_final_stage),
+            "exit_reason": stage_result["reason"],
+            "iterations": int(stage_result["iterations"]),
+            "ci_active": bool(stage_result["ci_active"]),
+            "metrics": last_metrics,
+        }
+
+        follow_up_action = None
+        if not is_final_stage and stage_result["reason"] == "max_iterations_reached":
+            if remesh_stage.on_miss == "force":
+                follow_up_action = "force_remesh"
+            elif remesh_stage.on_miss == "skip":
+                follow_up_action = "skip_remesh"
+            else:
+                outcome = "failed"
+                error_message = (
+                    f"stage {stage_index} remesh trigger did not fire before "
+                    f"{stage_result['iterations']} iterations"
+                )
+                follow_up_action = "error"
+        stage_record["follow_up_action"] = follow_up_action
+
+        _write_json(stage_artifacts.run_dir / "stage_exit.json", stage_record)
+        stage_artifacts.write_manifest(
+            script_path=script_path,
+            git_cwd=git_cwd,
+            config={
+                "stage_index": stage_index,
+                "num_images": band.numImages,
+                "requested_method": method if is_final_stage else "normal",
+                "force_converged": force_converged,
+                "max_iterations": max_iterations if remesh_stage is None or remesh_stage.max_wait_iterations is None else remesh_stage.max_wait_iterations,
+                "image_mobility_rates": None if not image_mobility_rates else dict(image_mobility_rates),
+                "remesh_stage": None
+                if remesh_stage is None
+                else {
+                    "target_num_images": remesh_stage.target_num_images,
+                    "max_wait_iterations": remesh_stage.max_wait_iterations,
+                    "on_miss": remesh_stage.on_miss,
+                    "trigger": type(remesh_stage.trigger).__name__,
+                },
+            },
+            prepared_structures=stage_input_paths,
+            extra_metadata={
+                "stage_exit": stage_record,
+            },
+        )
+        executed_stages.append(
+            {
+                **stage_record,
+                "artifacts": stage_artifacts,
+            }
+        )
+        final_band = band
+        final_optimizer = optimizer
+
+        if outcome == "failed" or stage_result["reason"] == "error":
+            if error_message is None and stage_result["reason"] == "error":
+                error_message = "stage execution failed"
+            break
+        if is_final_stage:
+            if stage_result["reason"] == "max_iterations_reached":
+                outcome = "incomplete_max_iterations"
+            break
+
+        if stage_result["reason"] == "remesh_triggered" or follow_up_action == "force_remesh":
+            remeshed = uniform_remesh(
+                band.path,
+                num_images=remesh_stage.target_num_images,
+                weight=stage_weight,
+            )
+            transition_record = {
+                "source_stage": int(stage_index),
+                "target_stage": int(stage_index + 1),
+                "source_num_images": int(band.numImages),
+                "target_num_images": int(remesh_stage.target_num_images),
+                "trigger_metrics": last_metrics,
+                "stage_exit_reason": stage_result["reason"],
+                "follow_up_action": follow_up_action,
+            }
+            transition_prefix = f"remesh_{stage_index:02d}_to_{stage_index + 1:02d}"
+            _write_json(transitions_dir / f"{transition_prefix}.json", transition_record)
+            write(str(transitions_dir / f"{transition_prefix}.xyz"), remeshed, format="extxyz")
+            transition_records.append(transition_record)
+            current_structures = remeshed
+            current_indices = list(range(len(remeshed)))
+            current_num_images = len(remeshed)
+            continue
+
+        if follow_up_action == "skip_remesh":
+            current_structures = _copy_images_with_calculators(band.path)
+            current_indices = list(range(len(current_structures)))
+            current_num_images = len(current_structures)
+            continue
+
+        outcome = "failed"
+        error_message = "unhandled staged workflow transition"
+        break
+
+    summary = {
+        "outcome": outcome,
+        "run_directory": str(workflow_artifacts.run_dir),
+        "stages": [
+            {
+                key: value
+                for key, value in stage.items()
+                if key != "artifacts"
+            }
+            for stage in executed_stages
+        ],
+        "transitions": transition_records,
+        "error": error_message,
+    }
+    _write_json(workflow_artifacts.run_dir / "workflow_summary.json", summary)
+    workflow_artifacts.write_manifest(
+        script_path=script_path,
+        git_cwd=git_cwd,
+        config={
+            "num_images": int(num_images),
+            "requested_method": method,
+            "force_converged": force_converged,
+            "max_iterations": max_iterations,
+            "image_mobility_rates": None if not image_mobility_rates else dict(image_mobility_rates),
+            "remesh_stages": [
+                {
+                    "target_num_images": stage.target_num_images,
+                    "max_wait_iterations": stage.max_wait_iterations,
+                    "on_miss": stage.on_miss,
+                    "trigger": type(stage.trigger).__name__,
+                }
+                for stage in remesh_plan
+            ],
+            "user_config": manifest_config,
+        },
+        prepared_structures=initial_inputs,
+        extra_metadata={
+            "summary_file": str(workflow_artifacts.run_dir / "workflow_summary.json"),
+            "transitions_dir": str(transitions_dir),
+            "outcome": outcome,
+            "stage_directories": [str(stage["artifacts"].run_dir) for stage in executed_stages],
+        },
+    )
+    return {
+        "artifacts": workflow_artifacts,
+        "workflow_artifacts": workflow_artifacts,
+        "workflow_summary": summary,
+        "stages": executed_stages,
+        "transitions": transition_records,
+        "band": final_band,
+        "optimizer": final_optimizer,
+    }

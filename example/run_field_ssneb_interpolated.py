@@ -101,9 +101,10 @@ def main(argv=None):
     )
 
     artifacts = result["artifacts"]
+    final_stage = result["stages"][-1]["artifacts"]
     print(f"Run directory: {artifacts.run_dir}")
-    print(f"Diagnostics: {artifacts.diagnostics_file}")
-    print(f"XYZ output: {artifacts.xyz_dir}")
+    print(f"Final stage diagnostics: {final_stage.diagnostics_file}")
+    print(f"Final stage XYZ output: {final_stage.xyz_dir}")
     return result
 
 

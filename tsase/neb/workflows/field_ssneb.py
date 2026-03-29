@@ -1,15 +1,11 @@
 """Reusable field-coupled SSNEB workflow helpers."""
 
-from pathlib import Path
-
 from tsase.neb.core.mapping import spatial_map
-from tsase.neb.io.artifacts import RunArtifacts
-from tsase.neb.io.restart import load_band_configuration_from_xyz
 from tsase.neb.models.charges import attach_field_charges, build_charge_array
 from tsase.neb.models.field import EnthalpyWrapper
-from tsase.neb.optimize.fire import fire_ssneb
 
 from .config import FieldSSNEBConfig
+from .staged import run_staged_ssneb
 
 
 def prepare_field_images(structures, charge_map, calculator):
@@ -38,10 +34,10 @@ def run_field_ssneb(
     spring=5.0,
     method="ci",
     filter_factory=None,
-    adaptive_springs=False,
-    kmin=None,
-    kmax=None,
-    image_update_schedule=None,
+    remesh_stages=None,
+    image_mobility_rates=None,
+    ci_activation_iteration=None,
+    ci_activation_force=None,
     band_kwargs=None,
     optimizer_kwargs=None,
     minimize_kwargs=None,
@@ -63,17 +59,16 @@ def run_field_ssneb(
         spring=spring,
         method=method,
         filter_factory=filter_factory,
-        adaptive_springs=adaptive_springs,
-        kmin=kmin,
-        kmax=kmax,
-        image_update_schedule=image_update_schedule,
+        remesh_stages=remesh_stages,
+        image_mobility_rates=image_mobility_rates,
+        ci_activation_iteration=ci_activation_iteration,
+        ci_activation_force=ci_activation_force,
         band_kwargs=band_kwargs,
         optimizer_kwargs=optimizer_kwargs,
         minimize_kwargs=minimize_kwargs,
         script_path=script_path,
         manifest_config=manifest_config,
     )
-    artifacts = RunArtifacts.create(base_dir=config.run_dir.parent, run_name=config.run_dir.name, timestamp=False)
     prepared = prepare_field_images(config.structures, config.charge_map, config.calculator)
     polarization_reference = spatial_map(prepared[0], config.reference_atoms)
     wrapped_calc = EnthalpyWrapper(
@@ -85,41 +80,30 @@ def run_field_ssneb(
     for atoms in prepared:
         atoms.calc = wrapped_calc
 
-    from tsase.neb.core.band import ssneb
-
-    band = ssneb(
-        prepared,
-        config.structure_indices,
-        numImages=config.num_images,
+    result = run_staged_ssneb(
+        structures=prepared,
+        structure_indices=config.structure_indices,
+        num_images=config.num_images,
+        remesh_stages=config.remesh_stages,
+        restart_xyz=config.restart_xyz,
         k=config.spring,
         method=config.method,
-        output_dir=str(artifacts.output_dir),
         filter_factory=config.filter_factory,
-        adaptive_springs=config.adaptive_springs,
-        kmin=config.kmin,
-        kmax=config.kmax,
-        image_update_schedule=config.image_update_schedule,
-        **config.band_kwargs,
-    )
-    if config.restart_xyz is not None:
-        load_band_configuration_from_xyz(band, str(config.restart_xyz))
-
-    optimizer = fire_ssneb(band, **config.optimizer_kwargs)
-    optimizer.minimize(**config.minimize_kwargs)
-
-    prepared_paths = artifacts.write_structures(prepared, indices=config.structure_indices)
-    if config.script_path is not None:
-        artifacts.snapshot_script(config.script_path)
-    artifacts.write_manifest(
+        output_dir=config.run_dir,
+        band_kwargs=config.band_kwargs,
+        optimizer_kwargs=config.optimizer_kwargs,
+        minimize_kwargs=config.minimize_kwargs,
+        image_mobility_rates=config.image_mobility_rates,
+        ci_activation_iteration=config.ci_activation_iteration,
+        ci_activation_force=config.ci_activation_force,
         script_path=config.script_path,
-        config=config.manifest_config,
-        prepared_structures=prepared_paths,
+        manifest_config=config.manifest_config,
     )
-    return {
-        "artifacts": artifacts,
-        "band": band,
-        "optimizer": optimizer,
+    result.update(
+        {
         "field_vector": config.field_vector,
         "prepared_structures": prepared,
         "config": config,
-    }
+        }
+    )
+    return result

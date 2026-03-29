@@ -24,10 +24,12 @@ class FieldWorkflowExampleTests(unittest.TestCase):
             )
 
             artifacts = result["artifacts"]
+            final_stage = result["stages"][-1]["artifacts"]
             self.assertTrue(Path(artifacts.run_dir).exists())
-            self.assertTrue(Path(artifacts.diagnostics_file).exists())
             self.assertTrue(Path(artifacts.manifest_file).exists())
-            self.assertTrue(Path(artifacts.xyz_dir, "iter_0000.xyz").exists())
+            self.assertTrue(Path(artifacts.run_dir, "workflow_summary.json").exists())
+            self.assertTrue(Path(final_stage.diagnostics_file).exists())
+            self.assertTrue(Path(final_stage.xyz_dir, "iter_0000.xyz").exists())
 
     def test_refactored_example_smoke(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -46,10 +48,12 @@ class FieldWorkflowExampleTests(unittest.TestCase):
             )
 
             artifacts = result["artifacts"]
+            final_stage = result["stages"][-1]["artifacts"]
             self.assertTrue(Path(artifacts.run_dir).exists())
-            self.assertTrue(Path(artifacts.diagnostics_file).exists())
             self.assertTrue(Path(artifacts.manifest_file).exists())
-            self.assertTrue(Path(artifacts.xyz_dir, "iter_0000.xyz").exists())
+            self.assertTrue(Path(artifacts.run_dir, "workflow_summary.json").exists())
+            self.assertTrue(Path(final_stage.diagnostics_file).exists())
+            self.assertTrue(Path(final_stage.xyz_dir, "iter_0000.xyz").exists())
 
 
 if __name__ == "__main__":
