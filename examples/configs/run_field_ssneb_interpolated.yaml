@@ -67,3 +67,14 @@ outputs:
     enabled: true
   stem:
     enabled: true
+
+preprocess:
+  output_dir: ../../example/preprocessed/run_field_ssneb_interpolated
+  relax:
+    enabled: true
+    fmax: 0.02
+  reference:
+    symmetrize: true
+    symprec: 1.0
+  outputs:
+    config_name: run_field_ssneb_interpolated_preprocessed.yaml

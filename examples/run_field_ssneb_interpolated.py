@@ -1,6 +1,11 @@
 #!/usr/bin/env python
 
-"""Run the maintained YAML-driven field-coupled SSNEB example."""
+"""Run the maintained YAML-driven field-coupled SSNEB example.
+
+For the PbZrO3 example config, first run
+``examples/preprocess_field_ssneb_control_points.py`` to produce NEB-ready CIFs
+and a derived YAML input for the actual NEB run.
+"""
 
 from argparse import ArgumentParser
 from pathlib import Path

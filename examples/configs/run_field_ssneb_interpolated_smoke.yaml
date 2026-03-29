@@ -70,3 +70,12 @@ outputs:
     enabled: true
   stem:
     enabled: false
+
+preprocess:
+  relax:
+    enabled: true
+    fmax: 10.0
+  reference:
+    symmetrize: false
+  outputs:
+    config_name: run_field_ssneb_interpolated_smoke_preprocessed.yaml
