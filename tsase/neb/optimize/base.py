@@ -1,11 +1,11 @@
 """Base optimizer utilities for SSNEB."""
 
-import os
-from copy import deepcopy
+from dataclasses import replace
+from pathlib import Path
 
-from ase import io
 from numpy import dot, sqrt, vdot
 
+from tsase.neb.io.reporting import Reporter
 from tsase.neb.models.field import POLARIZATION_E_A2_TO_C_M2
 from tsase.neb.util import sPBC, vmag
 from tsase.neb.viz.stem import save_projected_neb_sequence
@@ -26,10 +26,27 @@ class minimizer_ssneb:
     ):
         self.band = band
         self.reporter = getattr(band, "reporter", None)
+        band_layout = getattr(band, "layout", None)
         if xyz_dir is None:
             xyz_dir = getattr(band, "xyz_dir", "neb_xyz")
         self.xyz_dir = xyz_dir
         self.log_file = log_file if log_file is not None else getattr(band, "log_file", "fe.out")
+        if (
+            self.reporter is not None
+            and getattr(self.reporter, "is_active", False)
+            and band_layout is not None
+            and (
+                str(band_layout.xyz_dir) != str(Path(self.xyz_dir).expanduser())
+                or str(band_layout.log_file) != str(Path(self.log_file).expanduser())
+            )
+        ):
+            self.reporter = Reporter(
+                replace(
+                    band_layout,
+                    xyz_dir=Path(self.xyz_dir).expanduser().resolve(),
+                    log_file=Path(self.log_file).expanduser().resolve(),
+                )
+            )
         self.output_interval = max(1, int(output_interval))
         self.plot_property = self._normalize_plot_property(plot_property)
         self.ci_activation_iteration = ci_activation_iteration
@@ -138,7 +155,6 @@ class minimizer_ssneb:
         except Exception:
             return
 
-        os.makedirs(self.xyz_dir, exist_ok=True)
         adjusted_energies = []
         raw_energies = []
         for img in self.band.path:

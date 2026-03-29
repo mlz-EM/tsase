@@ -10,6 +10,7 @@ from ase.calculators.emt import EMT
 
 from tsase.neb.core.band import ssneb
 from tsase.neb.io.restart import load_band_configuration_from_xyz
+from tsase.neb.optimize.fire import fire_ssneb
 from tsase.neb.workflows import run_field_ssneb
 
 
@@ -121,6 +122,39 @@ class InterfaceCleanupTests(unittest.TestCase):
             self.assertAlmostEqual(float(band.path[-1].u), np.sum(restart_images[-1].positions[:, 0]))
             self.assertAlmostEqual(float(band.path[0].base_u), float(band.path[0].u))
             self.assertAlmostEqual(float(band.path[-1].base_u), float(band.path[-1].u))
+
+    def test_optimizer_level_xyz_and_log_overrides_are_honored(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            start = make_atoms(0.0)
+            end = make_atoms(0.5)
+            calc = EMT()
+            start.calc = calc
+            end.calc = calc
+            band = ssneb(
+                start,
+                end,
+                numImages=4,
+                output_dir=Path(tmpdir) / "band_outputs",
+                ss=False,
+                method="normal",
+            )
+            custom_xyz = Path(tmpdir) / "custom_xyz"
+            custom_log = Path(tmpdir) / "custom_fe.out"
+            optimizer = fire_ssneb(
+                band,
+                xyz_dir=str(custom_xyz),
+                log_file=str(custom_log),
+                output_interval=1,
+                dt=0.01,
+                dtmax=0.01,
+            )
+            optimizer.minimize(forceConverged=10.0, maxIterations=1)
+
+            self.assertTrue((custom_xyz / "iter_0001.xyz").exists())
+            self.assertTrue((custom_xyz / "energy_iter_0001.png").exists())
+            self.assertTrue(custom_log.exists())
+            self.assertFalse((Path(band.xyz_dir) / "iter_0001.xyz").exists())
+            self.assertFalse(Path(band.log_file).exists())
 
 
 if __name__ == "__main__":
