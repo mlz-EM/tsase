@@ -1,0 +1,72 @@
+run:
+  name: run_field_ssneb_interpolated
+  root: examples/runs/run_field_ssneb_interpolated
+
+path:
+  source:
+    kind: control_points
+    files:
+      - ../structures/cu_start.extxyz
+      - ../structures/cu_mid.extxyz
+      - ../structures/cu_end.extxyz
+    indices: [0, 2, 4]
+  num_images: 5
+
+model:
+  calculator:
+    kind: emt
+  charges:
+    kind: array
+    values: [1.0, -1.0]
+  field:
+    kind: cartesian
+    value: [0.03, 0.0, 0.0]
+  reference:
+    kind: first_structure
+
+band:
+  spring: 1.5
+  method: normal
+  ss: false
+  weight: 1.0
+
+constraints:
+  filter:
+    kind: none
+
+optimizer:
+  kind: fire
+  dt: 0.05
+  dtmax: 0.05
+  maxmove: 0.05
+  output_interval: 1
+  plot_property: px
+  convergence:
+    fmax: 0.2
+    max_steps: 3
+
+staging:
+  remesh:
+    -
+      target_num_images: 7
+      trigger:
+        kind: stabilized_perp_force
+        min_iterations: 1
+        relative_drop: 0.0
+        window: 1
+        plateau_tolerance: 0.0
+      max_wait_iterations: 1
+      on_miss: force
+
+outputs:
+  path_snapshot:
+    enabled: true
+    schedule:
+      every: 1
+      include_final: true
+  diagnostics:
+    enabled: true
+  energy_profile:
+    enabled: true
+  stem:
+    enabled: false

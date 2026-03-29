@@ -30,13 +30,8 @@ def load_band_configuration_from_xyz(band, xyz_path, remap=True):
     for image in band.path:
         initialize_image_properties(image, band.jacobian)
 
-    if hasattr(band, "_evaluate_image") and hasattr(band, "_finalize_image_state"):
-        for index in (0, band.numImages - 1):
-            result = band._evaluate_image(index)
-            if hasattr(band, "_apply_image_result"):
-                band._apply_image_result(index, result)
-            band._finalize_image_state(index)
-        if hasattr(band, "_update_spring_constants"):
-            band._update_spring_constants()
-        if hasattr(band, "update_image_rates"):
-            band.update_image_rates(0)
+    for index in range(band.numImages):
+        result = band._evaluate_image(index)
+        band._apply_image_result(index, result)
+        band._finalize_image_state(index)
+    band._refresh_band_state()

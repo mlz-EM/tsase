@@ -5,15 +5,14 @@ import os
 import sys
 from copy import deepcopy
 from math import atan, pi
+from pathlib import Path
 
 import numpy
 from ase import units
 
 from tsase.neb.constraints.adapters import make_filter_adapter
-from tsase.neb.io.paths import RunLayout
-from tsase.neb.io.reporting import make_reporter
+from tsase.neb.io.manager import OutputManager
 from tsase.neb.util import sPBC, vmag, vmag2, vproj, vunit
-from tsase.neb.viz.stem import save_projected_neb_sequence
 
 from .geometry import compute_jacobian, image_distance_vector, initialize_image_properties
 from .interfaces import ExecutionContext, ImageEvalResult, PathSpec
@@ -40,12 +39,9 @@ class ssneb:
         parallel=False,
         ss=True,
         express=numpy.zeros((3, 3)),
-        fixstrain=numpy.ones((3, 3)),
-        xyz_dir=None,
         filter_factory=None,
+        output_manager=None,
         output_dir=None,
-        log_file=None,
-        diagnostics_file=None,
     ):
         self.numImages = numImages
         self.k = k * numImages
@@ -59,22 +55,17 @@ class ssneb:
         self.express = express * units.GPa
         self.filter_factory = filter_factory
         self.context = ExecutionContext.from_parallel_flag(parallel)
-        self.parallel = self.context.is_parallel
-        self.rank = self.context.rank
-        self.size = self.context.size
-        self.layout = RunLayout.from_inputs(
-            output_dir=output_dir,
-            xyz_dir=xyz_dir,
-            diagnostics_file=diagnostics_file,
-            log_file=log_file,
+        self.output = (
+            output_manager
+            if output_manager is not None
+            else OutputManager.from_run_dir(
+                Path.cwd().resolve() if output_dir is None else output_dir,
+                active=self.context.is_output_owner,
+            )
         )
-        self.output_dir = str(self.layout.public_dir)
-        self.xyz_dir = str(self.layout.xyz_dir)
-        self.diagnostics_file = str(self.layout.diagnostics_file)
-        self.log_file = str(self.layout.log_file)
+        self.layout = self.output.paths
         self.frozen_images = set()
         self.CI_index = None
-        self.reporter = make_reporter(self.context, self.layout)
 
         if express[0][1] ** 2 + express[0][2] ** 2 + express[1][2] ** 2 > 1e-3:
             express[0][1] = 0
@@ -82,7 +73,6 @@ class ssneb:
             express[1][2] = 0
             if self.context.is_output_owner:
                 print("warning: xy, xz, yz components of the external pressure will be set to zero")
-        self.fixstrain = fixstrain
 
         self.path_spec = PathSpec.from_legacy_inputs(p1, p2, self.numImages)
         for p in self.path_spec.endpoints:
@@ -140,15 +130,30 @@ class ssneb:
                 self._apply_image_result(i, self._evaluate_image(i))
                 self._finalize_image_state(i)
         self._refresh_band_state()
-        if self.reporter.is_active:
-            self.reporter.initialize_diagnostics()
-            if all(hasattr(image, "u") for image in self.path):
-                self.write_diagnostics(0)
-            self.reporter.write_iteration_xyz(
-                self.reporter.make_snapshot_images(self.path),
-                0,
-                save_projected_neb_sequence,
-            )
+
+    @property
+    def parallel(self):
+        return self.context.is_parallel
+
+    @property
+    def rank(self):
+        return self.context.rank
+
+    @property
+    def size(self):
+        return self.context.size
+
+    @property
+    def output_dir(self):
+        return str(self.layout.outputs_dir)
+
+    @property
+    def diagnostics_file(self):
+        return str(self.layout.diagnostics_file)
+
+    @property
+    def log_file(self):
+        return str(self.layout.log_file)
 
     @contextmanager
     def image_workspace(self, index):
@@ -185,7 +190,6 @@ class ssneb:
                 stress = image.get_stress()
                 st = stress_to_virial(stress, image.get_volume())
                 st -= self.express * image.get_volume()
-                st *= self.fixstrain
         return ImageEvalResult(
             u=float(u),
             base_u=base_u,
@@ -218,9 +222,6 @@ class ssneb:
         self.path[index].enthalpy = self.path[index].u
 
     def _refresh_band_state(self):
-        for i, image in enumerate(self.path):
-            image.k_left = self.k if i > 0 else 0.0
-            image.k_right = self.k if i < self.numImages - 1 else 0.0
         self.CI_index = self._get_ci_index()
 
     def _get_ci_index(self):
@@ -236,7 +237,7 @@ class ssneb:
         return max(candidates, key=lambda index: self.path[index].u)
 
     def write_diagnostics(self, iteration):
-        self.reporter.write_diagnostics(iteration, self.path, self.frozen_images)
+        self.output.write_diagnostics(iteration, self.path, self.frozen_images)
 
     def forces(self):
         if self.parallel:

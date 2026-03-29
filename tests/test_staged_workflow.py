@@ -84,20 +84,20 @@ class StagedWorkflowTests(unittest.TestCase):
             self.assertFalse(result["stages"][0]["ci_active"])
             self.assertEqual(result["stages"][1]["exit_reason"], "final_converged")
             self.assertEqual(Path(result["artifacts"].run_dir), Path(result["stages"][-1]["artifacts"].run_dir))
-            self.assertTrue((output_dir / "workflow_manifest.json").exists())
-            self.assertTrue((output_dir / "workflow_summary.json").exists())
-            self.assertTrue((output_dir / "stage_00" / "run_manifest.json").exists())
-            self.assertTrue((output_dir / "stage_00" / "stage_exit.json").exists())
-            self.assertTrue((output_dir / "stage_01" / "run_manifest.json").exists())
-            self.assertTrue((output_dir / "stage_01" / "stage_exit.json").exists())
+            self.assertTrue((output_dir / "config" / "manifest.json").exists())
+            self.assertTrue((output_dir / "config" / "workflow_summary.json").exists())
+            self.assertTrue((output_dir / "stages" / "stage_00" / "stage_manifest.json").exists())
+            self.assertTrue((output_dir / "stages" / "stage_00" / "stage_exit.json").exists())
+            self.assertTrue((output_dir / "stages" / "stage_01" / "stage_manifest.json").exists())
+            self.assertTrue((output_dir / "stages" / "stage_01" / "stage_exit.json").exists())
             self.assertTrue((output_dir / "transitions" / "remesh_00_to_01.json").exists())
             self.assertTrue((output_dir / "transitions" / "remesh_00_to_01.xyz").exists())
-            with (output_dir / "workflow_manifest.json").open("r", encoding="utf-8") as handle:
+            with (output_dir / "config" / "manifest.json").open("r", encoding="utf-8") as handle:
                 manifest = json.load(handle)
-            self.assertEqual(manifest["outputs"]["xyz_dir"], str(result["artifacts"].xyz_dir))
+            self.assertEqual(manifest["final_outputs"]["path_dir"], str(result["artifacts"].path_dir))
             self.assertEqual(
-                manifest["workflow_outputs"]["workflow_summary"],
-                str((output_dir / "workflow_summary.json").resolve()),
+                manifest["summary_file"],
+                str((output_dir / "config" / "workflow_summary.json").resolve()),
             )
 
     def test_final_convergence_is_disabled_before_remesh_completion(self):
@@ -127,7 +127,7 @@ class StagedWorkflowTests(unittest.TestCase):
             self.assertEqual(first_stage["follow_up_action"], "force_remesh")
             self.assertEqual(result["stages"][1]["exit_reason"], "final_converged")
 
-            with (output_dir / "workflow_summary.json").open("r", encoding="utf-8") as handle:
+            with (output_dir / "config" / "workflow_summary.json").open("r", encoding="utf-8") as handle:
                 summary = json.load(handle)
             self.assertEqual(summary["outcome"], "completed")
 
@@ -155,9 +155,9 @@ class StagedWorkflowTests(unittest.TestCase):
                     minimize_kwargs={"forceConverged": 10.0, "maxIterations": 1},
                 )
 
-            with (output_dir / "workflow_summary.json").open("r", encoding="utf-8") as handle:
+            with (output_dir / "config" / "workflow_summary.json").open("r", encoding="utf-8") as handle:
                 summary = json.load(handle)
-            with (output_dir / "stage_00" / "stage_exit.json").open("r", encoding="utf-8") as handle:
+            with (output_dir / "stages" / "stage_00" / "stage_exit.json").open("r", encoding="utf-8") as handle:
                 stage_exit = json.load(handle)
             self.assertEqual(summary["outcome"], "failed")
             self.assertEqual(summary["error"], "stage boom")
@@ -189,8 +189,8 @@ class StagedWorkflowTests(unittest.TestCase):
             )
 
             first_stage_artifacts = result["stages"][0]["artifacts"]
-            self.assertTrue((Path(first_stage_artifacts.xyz_dir) / "iter_0001.xyz").exists())
-            self.assertTrue((Path(first_stage_artifacts.xyz_dir) / "energy_iter_0001.png").exists())
+            self.assertTrue((Path(first_stage_artifacts.path_dir) / "iter_0001.xyz").exists())
+            self.assertTrue((Path(first_stage_artifacts.energy_dir) / "profile_iter_0001.png").exists())
 
 
 if __name__ == "__main__":

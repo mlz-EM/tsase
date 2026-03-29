@@ -11,7 +11,7 @@ from ase.calculators.emt import EMT
 from tsase.neb.core.band import ssneb
 from tsase.neb.io.restart import load_band_configuration_from_xyz
 from tsase.neb.optimize.fire import fire_ssneb
-from tsase.neb.workflows import run_field_ssneb
+from tsase.neb.workflows import FieldSSNEBConfig, run_field_ssneb
 
 
 class WorkspaceWritingCalculator(Calculator):
@@ -76,7 +76,7 @@ class InterfaceCleanupTests(unittest.TestCase):
                 Atoms(positions=[[1.6, 3.0, 3.0], [4.4, 3.0, 3.0]], **common),
                 Atoms(positions=[[2.1, 2.0, 3.0], [3.9, 4.0, 3.0]], **common),
             ]
-            result = run_field_ssneb(
+            config = FieldSSNEBConfig.from_inputs(
                 structures=structures,
                 structure_indices=[0, 4],
                 num_images=5,
@@ -88,8 +88,13 @@ class InterfaceCleanupTests(unittest.TestCase):
                 optimizer_kwargs={"maxmove": 0.05, "dt": 0.05, "dtmax": 0.05, "output_interval": 1},
                 minimize_kwargs={"forceConverged": 10.0, "maxIterations": 1},
             )
+            result = run_field_ssneb(config=config)
             self.assertTrue(np.allclose(result["field_vector"], np.zeros(3)))
             self.assertTrue(Path(result["stages"][-1]["artifacts"].diagnostics_file).exists())
+
+    def test_run_field_ssneb_requires_explicit_config(self):
+        with self.assertRaisesRegex(TypeError, "config=FieldSSNEBConfig"):
+            run_field_ssneb(structures=[])
 
     def test_restart_reapplies_endpoint_state(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -123,7 +128,7 @@ class InterfaceCleanupTests(unittest.TestCase):
             self.assertAlmostEqual(float(band.path[0].base_u), float(band.path[0].u))
             self.assertAlmostEqual(float(band.path[-1].base_u), float(band.path[-1].u))
 
-    def test_optimizer_level_xyz_and_log_overrides_are_honored(self):
+    def test_optimizer_outputs_stay_under_the_band_output_manager(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             start = make_atoms(0.0)
             end = make_atoms(0.5)
@@ -138,23 +143,18 @@ class InterfaceCleanupTests(unittest.TestCase):
                 ss=False,
                 method="normal",
             )
-            custom_xyz = Path(tmpdir) / "custom_xyz"
-            custom_log = Path(tmpdir) / "custom_fe.out"
             optimizer = fire_ssneb(
                 band,
-                xyz_dir=str(custom_xyz),
-                log_file=str(custom_log),
                 output_interval=1,
                 dt=0.01,
                 dtmax=0.01,
             )
             optimizer.minimize(forceConverged=10.0, maxIterations=1)
 
-            self.assertTrue((custom_xyz / "iter_0001.xyz").exists())
-            self.assertTrue((custom_xyz / "energy_iter_0001.png").exists())
-            self.assertTrue(custom_log.exists())
-            self.assertFalse((Path(band.xyz_dir) / "iter_0001.xyz").exists())
-            self.assertFalse(Path(band.log_file).exists())
+            self.assertTrue((Path(band.output.path_dir) / "iter_0001.xyz").exists())
+            self.assertTrue((Path(band.output.energy_dir) / "profile_iter_0001.png").exists())
+            self.assertTrue(Path(band.output.log_file).exists())
+            self.assertFalse((Path(band.output.path_dir) / "iter_0000.xyz").exists())
 
 
 if __name__ == "__main__":

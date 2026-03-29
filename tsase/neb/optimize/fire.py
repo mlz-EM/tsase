@@ -19,19 +19,15 @@ class fire_ssneb(minimizer_ssneb):
         fdec=0.5,
         astart=0.1,
         fa=0.99,
-        xyz_dir=None,
         output_interval=1,
         plot_property=None,
-        log_file=None,
         image_mobility_rates=None,
     ):
         minimizer_ssneb.__init__(
             self,
             path,
-            xyz_dir=xyz_dir,
             output_interval=output_interval,
             plot_property=plot_property,
-            log_file=log_file,
             image_mobility_rates=image_mobility_rates,
         )
         self.maxmove = maxmove

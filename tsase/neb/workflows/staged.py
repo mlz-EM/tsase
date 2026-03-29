@@ -1,14 +1,13 @@
 """Public staged SSNEB workflow helpers."""
 
 from dataclasses import dataclass
-import json
 from pathlib import Path
 from typing import Optional
 
 from ase.io import write
 
 from tsase.neb.core.remesh import uniform_remesh
-from tsase.neb.io.artifacts import RunArtifacts
+from tsase.neb.io.manager import OutputManager
 from tsase.neb.optimize.fire import fire_ssneb
 
 
@@ -63,19 +62,6 @@ class StabilizedPerpForce:
         return plateau_span <= self.plateau_tolerance * max(current, 1.0e-12)
 
 
-def _write_json(path, payload):
-    destination = Path(path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    with destination.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True)
-
-
-def _public_artifacts(workflow_artifacts, executed_stages):
-    if not executed_stages:
-        return workflow_artifacts
-    return executed_stages[-1]["artifacts"]
-
-
 def _copy_images_with_calculators(images):
     copied = []
     for image in images:
@@ -123,17 +109,15 @@ def _activate_ci(band, iteration, force_max):
     band.method = "ci"
     if hasattr(band, "_refresh_band_state"):
         band._refresh_band_state()
-    if (not band.parallel) or (band.parallel and band.rank == 0):
+    if band.context.is_output_owner:
         print(f"Climbing image activated at iteration {iteration} (Total Force={force_max:.9g})")
 
 
-def _build_stage_record(*, stage_index, stage_artifacts, band, is_final_stage, stage_result):
-    last_metrics = (
-        None if not stage_result["metrics_history"] else stage_result["metrics_history"][-1]
-    )
+def _build_stage_record(*, stage_index, stage_output, band, is_final_stage, stage_result):
+    last_metrics = None if not stage_result["metrics_history"] else stage_result["metrics_history"][-1]
     return {
         "stage_index": int(stage_index),
-        "stage_dir": str(stage_artifacts.run_dir),
+        "stage_dir": str(stage_output.run_dir),
         "num_images": int(band.numImages),
         "is_final_stage": bool(is_final_stage),
         "exit_reason": stage_result["reason"],
@@ -145,7 +129,7 @@ def _build_stage_record(*, stage_index, stage_artifacts, band, is_final_stage, s
 
 def _write_stage_outputs(
     *,
-    stage_artifacts,
+    stage_output,
     stage_index,
     band,
     is_final_stage,
@@ -155,21 +139,20 @@ def _write_stage_outputs(
     force_converged,
     stage_max_iterations,
     image_mobility_rates,
-    stage_input_paths,
     script_path,
     git_cwd,
     follow_up_action=None,
 ):
     stage_record = _build_stage_record(
         stage_index=stage_index,
-        stage_artifacts=stage_artifacts,
+        stage_output=stage_output,
         band=band,
         is_final_stage=is_final_stage,
         stage_result=stage_result,
     )
     stage_record["follow_up_action"] = follow_up_action
-    _write_json(stage_artifacts.run_dir / "stage_exit.json", stage_record)
-    stage_artifacts.write_manifest(
+    stage_output.write_json(stage_output.run_dir / "stage_exit.json", stage_record)
+    stage_output.write_manifest(
         script_path=script_path,
         git_cwd=git_cwd,
         config={
@@ -188,8 +171,8 @@ def _write_stage_outputs(
                 "trigger": type(remesh_stage.trigger).__name__,
             },
         },
-        prepared_structures=stage_input_paths,
         extra_metadata={
+            "outputs": stage_output.as_public_paths(),
             "stage_exit": stage_record,
         },
     )
@@ -198,7 +181,7 @@ def _write_stage_outputs(
 
 def _write_workflow_outputs(
     *,
-    workflow_artifacts,
+    workflow_output,
     num_images,
     method,
     force_converged,
@@ -206,7 +189,6 @@ def _write_workflow_outputs(
     image_mobility_rates,
     remesh_plan,
     manifest_config,
-    initial_inputs,
     script_path,
     git_cwd,
     executed_stages,
@@ -214,23 +196,20 @@ def _write_workflow_outputs(
     outcome,
     error_message,
 ):
-    public_artifacts = _public_artifacts(workflow_artifacts, executed_stages)
     summary = {
         "outcome": outcome,
-        "run_directory": str(workflow_artifacts.run_dir),
+        "run_directory": str(workflow_output.run_dir),
         "stages": [
-            {
-                key: value
-                for key, value in stage.items()
-                if key != "artifacts"
-            }
+            {key: value for key, value in stage.items() if key != "artifacts"}
             for stage in executed_stages
         ],
         "transitions": transition_records,
         "error": error_message,
     }
-    _write_json(workflow_artifacts.run_dir / "workflow_summary.json", summary)
-    workflow_artifacts.write_manifest(
+    summary_file = workflow_output.paths.config_dir / "workflow_summary.json"
+    workflow_output.write_json(summary_file, summary)
+    final_output = workflow_output if not executed_stages else executed_stages[-1]["artifacts"]
+    workflow_output.write_manifest(
         script_path=script_path,
         git_cwd=git_cwd,
         config={
@@ -250,22 +229,15 @@ def _write_workflow_outputs(
             ],
             "user_config": manifest_config,
         },
-        prepared_structures=initial_inputs,
         extra_metadata={
-            "outputs": public_artifacts.as_neb_paths(),
-            "workflow_outputs": {
-                "run_directory": str(workflow_artifacts.run_dir),
-                "workflow_manifest": str(workflow_artifacts.manifest_file),
-                "workflow_summary": str(workflow_artifacts.run_dir / "workflow_summary.json"),
-                "transitions_dir": str(workflow_artifacts.run_dir / "transitions"),
-            },
-            "summary_file": str(workflow_artifacts.run_dir / "workflow_summary.json"),
-            "transitions_dir": str(workflow_artifacts.run_dir / "transitions"),
-            "outcome": outcome,
+            "summary_file": str(summary_file),
+            "transitions_dir": str(workflow_output.paths.transitions_dir),
             "stage_directories": [str(stage["artifacts"].run_dir) for stage in executed_stages],
+            "final_outputs": final_output.as_public_paths(),
+            "outcome": outcome,
         },
     )
-    return summary
+    return summary, summary_file
 
 
 def _run_stage(
@@ -352,6 +324,7 @@ def run_staged_ssneb(
     method="ci",
     filter_factory=None,
     output_dir=None,
+    output_settings=None,
     band_kwargs=None,
     optimizer_kwargs=None,
     minimize_kwargs=None,
@@ -360,9 +333,12 @@ def run_staged_ssneb(
     ci_activation_force=None,
     script_path=None,
     manifest_config=None,
+    resolved_config=None,
+    input_config_path=None,
     git_cwd=None,
 ):
     """Run SSNEB as one or more conservative stages with optional remeshing."""
+
     from tsase.neb.core.band import ssneb
     from tsase.neb.io.restart import load_band_configuration_from_xyz
 
@@ -374,32 +350,31 @@ def run_staged_ssneb(
     minimize_options = {} if minimize_kwargs is None else dict(minimize_kwargs)
     force_converged = float(minimize_options.get("forceConverged", 0.01))
     max_iterations = int(minimize_options.get("maxIterations", 1000))
-    stage_weight = float(band_options.get("weight", 1.0))
 
-    if output_dir is None:
-        workflow_artifacts = RunArtifacts.create(
+    workflow_output = (
+        OutputManager.create(
             base_dir="neb_runs",
             run_name="staged_ssneb",
             timestamp=True,
+            settings=output_settings,
         )
-        workflow_artifacts.manifest_file = workflow_artifacts.run_dir / "workflow_manifest.json"
-    else:
-        workflow_dir = Path(output_dir).expanduser().resolve()
-        workflow_dir.mkdir(parents=True, exist_ok=True)
-        workflow_artifacts = RunArtifacts(
-            workflow_dir,
-            manifest_name="workflow_manifest.json",
-        )
-
-    transitions_dir = workflow_artifacts.run_dir / "transitions"
-    transitions_dir.mkdir(parents=True, exist_ok=True)
-    initial_inputs = workflow_artifacts.write_structures(
-        structures,
-        indices=indices,
-        subdir="initial_inputs",
+        if output_dir is None
+        else OutputManager.from_run_dir(output_dir, settings=output_settings)
     )
+    workflow_output.paths.config_dir.mkdir(parents=True, exist_ok=True)
+    workflow_output.paths.transitions_dir.mkdir(parents=True, exist_ok=True)
+    workflow_output.paths.stages_dir.mkdir(parents=True, exist_ok=True)
+    if input_config_path is not None:
+        workflow_output.copy_input_config(input_config_path)
+    if resolved_config is not None:
+        from .config import dump_yaml
+
+        workflow_output.write_text(
+            workflow_output.paths.resolved_config_file,
+            dump_yaml(resolved_config) + "\n",
+        )
     if script_path is not None:
-        workflow_artifacts.snapshot_script(script_path)
+        workflow_output.snapshot_script(script_path)
 
     current_structures = _copy_images_with_calculators(structures)
     current_indices = list(indices)
@@ -415,9 +390,11 @@ def run_staged_ssneb(
     for stage_index in range(total_stage_count):
         is_final_stage = stage_index == total_stage_count - 1
         remesh_stage = None if is_final_stage else remesh_plan[stage_index]
-        stage_dir = workflow_artifacts.run_dir / f"stage_{stage_index:02d}"
-        stage_dir.mkdir(parents=True, exist_ok=True)
-        stage_artifacts = RunArtifacts(stage_dir)
+        stage_dir = workflow_output.paths.stages_dir / f"stage_{stage_index:02d}"
+        stage_output = workflow_output.child(
+            stage_dir,
+            manifest_file=stage_dir / "stage_manifest.json",
+        )
 
         stage_method = method if is_final_stage else "normal"
         band = ssneb(
@@ -426,8 +403,8 @@ def run_staged_ssneb(
             numImages=current_num_images,
             k=k,
             method=stage_method,
-            output_dir=str(stage_artifacts.run_dir),
             filter_factory=filter_factory,
+            output_manager=stage_output,
             **band_options,
         )
         if stage_index == 0 and restart_xyz is not None:
@@ -437,10 +414,6 @@ def run_staged_ssneb(
             band,
             image_mobility_rates=image_mobility_rates,
             **optimizer_options,
-        )
-        stage_input_paths = stage_artifacts.write_structures(
-            [image.copy() for image in band.path],
-            indices=list(range(band.numImages)),
         )
 
         stage_max_iterations = (
@@ -468,7 +441,7 @@ def run_staged_ssneb(
                 "ci_active": False,
             }
             stage_record = _write_stage_outputs(
-                stage_artifacts=stage_artifacts,
+                stage_output=stage_output,
                 stage_index=stage_index,
                 band=band,
                 is_final_stage=is_final_stage,
@@ -478,22 +451,16 @@ def run_staged_ssneb(
                 force_converged=force_converged,
                 stage_max_iterations=stage_max_iterations,
                 image_mobility_rates=image_mobility_rates,
-                stage_input_paths=stage_input_paths,
                 script_path=script_path,
                 git_cwd=git_cwd,
             )
-            executed_stages.append(
-                {
-                    **stage_record,
-                    "artifacts": stage_artifacts,
-                }
-            )
+            executed_stages.append({**stage_record, "artifacts": stage_output})
             final_band = band
             final_optimizer = optimizer
             outcome = "failed"
             error_message = str(exc)
             _write_workflow_outputs(
-                workflow_artifacts=workflow_artifacts,
+                workflow_output=workflow_output,
                 num_images=num_images,
                 method=method,
                 force_converged=force_converged,
@@ -501,7 +468,6 @@ def run_staged_ssneb(
                 image_mobility_rates=image_mobility_rates,
                 remesh_plan=remesh_plan,
                 manifest_config=manifest_config,
-                initial_inputs=initial_inputs,
                 script_path=script_path,
                 git_cwd=git_cwd,
                 executed_stages=executed_stages,
@@ -518,15 +484,13 @@ def run_staged_ssneb(
             elif remesh_stage.on_miss == "skip":
                 follow_up_action = "skip_remesh"
             else:
-                outcome = "failed"
-                error_message = (
-                    f"stage {stage_index} remesh trigger did not fire before "
-                    f"{stage_result['iterations']} iterations"
-                )
-                follow_up_action = "error"
+                stage_result = {
+                    **stage_result,
+                    "reason": "remesh_trigger_missed",
+                }
 
         stage_record = _write_stage_outputs(
-            stage_artifacts=stage_artifacts,
+            stage_output=stage_output,
             stage_index=stage_index,
             band=band,
             is_final_stage=is_final_stage,
@@ -536,65 +500,53 @@ def run_staged_ssneb(
             force_converged=force_converged,
             stage_max_iterations=stage_max_iterations,
             image_mobility_rates=image_mobility_rates,
-            stage_input_paths=stage_input_paths,
             script_path=script_path,
             git_cwd=git_cwd,
             follow_up_action=follow_up_action,
         )
-        executed_stages.append(
-            {
-                **stage_record,
-                "artifacts": stage_artifacts,
-            }
-        )
+        executed_stages.append({**stage_record, "artifacts": stage_output})
         final_band = band
         final_optimizer = optimizer
 
-        if outcome == "failed" or stage_result["reason"] == "error":
-            if error_message is None and stage_result["reason"] == "error":
-                error_message = "stage execution failed"
-            break
         if is_final_stage:
-            if stage_result["reason"] == "max_iterations_reached":
-                outcome = "incomplete_max_iterations"
             break
 
-        if stage_result["reason"] == "remesh_triggered" or follow_up_action == "force_remesh":
-            remeshed = uniform_remesh(
-                band.path,
-                num_images=remesh_stage.target_num_images,
-                weight=stage_weight,
-            )
-            transition_record = {
-                "source_stage": int(stage_index),
-                "target_stage": int(stage_index + 1),
-                "source_num_images": int(band.numImages),
-                "target_num_images": int(remesh_stage.target_num_images),
-                "trigger_metrics": stage_record["metrics"],
-                "stage_exit_reason": stage_result["reason"],
-                "follow_up_action": follow_up_action,
-            }
-            transition_prefix = f"remesh_{stage_index:02d}_to_{stage_index + 1:02d}"
-            _write_json(transitions_dir / f"{transition_prefix}.json", transition_record)
-            write(str(transitions_dir / f"{transition_prefix}.xyz"), remeshed, format="extxyz")
-            transition_records.append(transition_record)
-            current_structures = remeshed
-            current_indices = list(range(len(remeshed)))
-            current_num_images = len(remeshed)
-            continue
+        if stage_result["reason"] == "remesh_trigger_missed" and remesh_stage.on_miss == "error":
+            outcome = "failed"
+            error_message = "remesh trigger did not fire before the configured maximum wait"
+            break
 
-        if follow_up_action == "skip_remesh":
+        if stage_result["reason"] == "max_iterations_reached" and remesh_stage.on_miss == "skip":
             current_structures = _copy_images_with_calculators(band.path)
-            current_indices = list(range(len(current_structures)))
-            current_num_images = len(current_structures)
+            current_indices = list(range(band.numImages))
+            current_num_images = band.numImages
             continue
 
-        outcome = "failed"
-        error_message = "unhandled staged workflow transition"
-        break
+        remeshed = uniform_remesh(band.path, num_images=remesh_stage.target_num_images)
+        transition_index = len(transition_records)
+        transition_xyz = workflow_output.paths.transitions_dir / f"remesh_{transition_index:02d}_to_{transition_index + 1:02d}.xyz"
+        transition_json = workflow_output.paths.transitions_dir / f"remesh_{transition_index:02d}_to_{transition_index + 1:02d}.json"
+        if workflow_output.is_active:
+            write(str(transition_xyz), [image.copy() for image in remeshed], format="extxyz")
+        transition_record = {
+            "from_stage": stage_index,
+            "to_stage": stage_index + 1,
+            "from_num_images": band.numImages,
+            "to_num_images": remesh_stage.target_num_images,
+            "reason": stage_result["reason"],
+            "follow_up_action": follow_up_action,
+            "xyz_file": str(transition_xyz),
+            "json_file": str(transition_json),
+        }
+        workflow_output.write_json(transition_json, transition_record)
+        transition_records.append(transition_record)
 
-    summary = _write_workflow_outputs(
-        workflow_artifacts=workflow_artifacts,
+        current_structures = _copy_images_with_calculators(remeshed)
+        current_indices = list(range(remesh_stage.target_num_images))
+        current_num_images = remesh_stage.target_num_images
+
+    workflow_summary, summary_file = _write_workflow_outputs(
+        workflow_output=workflow_output,
         num_images=num_images,
         method=method,
         force_converged=force_converged,
@@ -602,7 +554,6 @@ def run_staged_ssneb(
         image_mobility_rates=image_mobility_rates,
         remesh_plan=remesh_plan,
         manifest_config=manifest_config,
-        initial_inputs=initial_inputs,
         script_path=script_path,
         git_cwd=git_cwd,
         executed_stages=executed_stages,
@@ -610,13 +561,15 @@ def run_staged_ssneb(
         outcome=outcome,
         error_message=error_message,
     )
-    public_artifacts = _public_artifacts(workflow_artifacts, executed_stages)
+
     return {
-        "artifacts": public_artifacts,
-        "workflow_artifacts": workflow_artifacts,
-        "workflow_summary": summary,
-        "stages": executed_stages,
-        "transitions": transition_records,
         "band": final_band,
         "optimizer": final_optimizer,
+        "artifacts": executed_stages[-1]["artifacts"] if executed_stages else workflow_output,
+        "workflow_output": workflow_output,
+        "workflow_artifacts": workflow_output,
+        "stages": executed_stages,
+        "transitions": transition_records,
+        "workflow_summary": workflow_summary,
+        "summary_file": str(summary_file),
     }

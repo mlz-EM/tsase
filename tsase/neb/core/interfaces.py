@@ -73,7 +73,8 @@ class PathSpec:
         return self.structures
 
     def build_path(self):
+        if len(self.structures) == self.num_images and self.indices == list(range(self.num_images)):
+            return [image.copy() for image in self.structures]
         if len(self.structures) == 2 and self.indices == [0, self.num_images - 1]:
             return interpolate_path(self.structures[0], self.structures[1], self.num_images)
         return generate_multi_point_path(self.structures, self.indices, self.num_images)
-

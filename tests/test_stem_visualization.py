@@ -11,7 +11,7 @@ from unittest import mock
 import numpy as np
 from ase import Atoms
 
-from tsase.neb.io.reporting import Reporter
+from tsase.neb.io.manager import OutputManager
 from tsase.neb.viz import stem
 
 
@@ -93,17 +93,14 @@ class StemVisualizationTests(unittest.TestCase):
             self.assertTrue(diagnostics_file.exists())
             self.assertIn("bad frame", diagnostics_file.read_text(encoding="utf-8"))
 
-    def test_reporter_surfaces_stem_skip_diagnostics(self):
+    def test_output_manager_surfaces_stem_skip_diagnostics(self):
         with TemporaryDirectory() as tmpdir:
-            layout = SimpleNamespace(
-                xyz_dir=Path(tmpdir),
-            )
-            reporter = Reporter(layout)
+            output = OutputManager.from_run_dir(tmpdir, settings={"stem": True})
             images = [Atoms("H", positions=[[0.0, 0.0, 0.0]])]
 
             stream = io.StringIO()
             with redirect_stdout(stream):
-                reporter.write_iteration_xyz(
+                output.write_path_snapshot(
                     images,
                     5,
                     lambda *_args, **_kwargs: {
