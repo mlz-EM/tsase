@@ -19,13 +19,13 @@ MODEL_PATH = ROOT / "example" / "MACE_model.model"
 structures = sorted([path for path in os.listdir(STRUCTURE_PATHS) if path.endswith('.cif')])
 
 
-ref = -980.136346-7.842693/1000
+ref = -980.136346-(7.8426930-0.042475)/1000
 base_calc = MACECalculator(model_paths=str(MODEL_PATH), device="cuda")
 for path in structures:
     atoms = read(STRUCTURE_PATHS/path) 
     atoms.set_calculator(base_calc)
     optimizer = BFGS(atoms, logfile=None)  # you can also use BFGS(atoms)
-    optimizer.run(fmax=0.05)  # fmax in eV/Å
+    optimizer.run(fmax=0.001)  # fmax in eV/Å
     energy = atoms.get_potential_energy()
     n_atoms = len(atoms)
 

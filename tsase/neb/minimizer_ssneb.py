@@ -5,6 +5,7 @@ ssneb mimizer superclass
 import os
 from copy import deepcopy
 from .util import vmag, sPBC
+from .stem_visualization import save_projected_neb_sequence
 from ase import io
 from numpy import dot, sqrt, vdot
 from .field import POLARIZATION_E_A2_TO_C_M2
@@ -145,6 +146,7 @@ class minimizer_ssneb:
             snap = img.copy()
             snap.calc = None
             snap.info = deepcopy(getattr(img, "info", {}))
+            snap.info.pop("spatial_map_order", None)
             snap.info["neb_image"] = i
             if hasattr(img, "u"):
                 try:
@@ -166,6 +168,17 @@ class minimizer_ssneb:
             images.append(snap)
         outfile = os.path.join(self.xyz_dir, f"iter_{iteration:04d}.xyz")
         io.write(outfile, images, format="extxyz")
+        result = save_projected_neb_sequence(
+            images,
+            xyz_dir=self.xyz_dir,
+            iteration=iteration,
+        )
+        if result.get("status") != "ok":
+            diagnostics_file = result.get("diagnostics_file")
+            print(
+                "Projected STEM visualization skipped for "
+                f"iter_{iteration:04d}; see {diagnostics_file}"
+            )
 
     def _save_energy_plot(self, iteration):
         if self.band.parallel and self.band.rank != 0:

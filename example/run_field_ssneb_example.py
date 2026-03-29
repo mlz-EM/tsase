@@ -5,8 +5,8 @@
 from pathlib import Path
 
 import numpy as np
-from mace.calculators import MACECalculator
 from tsase import neb
+from tsase.neb.runtime import load_mace_calculator
 from ase.io import read
 from ase.optimize import BFGS
 from ase.spacegroup.symmetrize import get_symmetrized_atoms
@@ -17,12 +17,12 @@ RUNS_DIR = ROOT / "example" / "field_ssneb_runs"
 
 # Input structures and model available in this repository.
 STRUCTURE_PATHS = [
-    ROOT / "example" / "free_cluster_001_lowest_energy.cif",
+    ROOT / "example" / "1_v0.cif",
     # ROOT / "example" / "IM_v0.cif",
-    ROOT / "example" / "free_cluster_008_lowest_energy.cif",
+    ROOT / "example" / "25_v0.cif",
 ]
 STRUCTURE_INDICES = [0, 26]
-NUM_IMAGES = 27
+NUM_IMAGES = 17
 MODEL_PATH = ROOT / "example" / "MACE_model.model"
 POLARIZATION_REFERENCE_PATH = ROOT / "example" / "Pm-3m.cif"
 
@@ -40,7 +40,7 @@ HYDROSTATIC_STRAIN = False
 CONSTANT_VOLUME = False
 
 # NEB / optimizer settings.
-SPRING = 5.0
+SPRING = 3.0
 SPRING_MIN = 5.0
 SPRING_MAX = 20.0
 ADAPTIVE_SPRINGS = False
@@ -75,6 +75,7 @@ def build_filter_factory():
 
 
 def main():
+    MACECalculator = load_mace_calculator()
     artifacts = neb.RunArtifacts.create(
         base_dir=RUNS_DIR,
         run_name=Path(__file__).stem,

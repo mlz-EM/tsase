@@ -22,10 +22,12 @@ from math import sqrt, atan, pi
 from tsase.neb.util import vmag, vmag2, vunit, vproj, vdot, sPBC
 from tsase.neb.run_artifacts import resolve_output_paths
 from tsase.neb.ssneb_utils import (compute_jacobian, interpolate_path,
+                                    ensure_atom_ids,
                                     initialize_image_properties,
                                     image_distance_vector,
                                     generate_multi_point_path)
 from tsase.neb.filtering import make_filter_adapter
+from tsase.neb.stem_visualization import save_projected_neb_sequence
 from ase import atoms, units, io
 
 
@@ -56,10 +58,10 @@ class ssneb:
                  dneb = False, dnebOrg = False, method = 'normal',            \
                  onlyci = False, weight = 1, parallel = False, ss = True,     \
                  express = numpy.zeros((3,3)), fixstrain = numpy.ones((3,3)), \
-                 xyz_dir = "neb_xyz", filter_factory = None,                   \
+                 xyz_dir = None, filter_factory = None,                        \
                  output_dir = None, log_file = None,                           \
                  adaptive_springs = False, kmin = None, kmax = None,          \
-                 adaptive_eps = 1e-3, diagnostics_file = "neb_diagnostics.csv", \
+                 adaptive_eps = 1e-3, diagnostics_file = None,                \
                  image_update_schedule = None):
         """
         The neb constructor.
@@ -151,12 +153,36 @@ class ssneb:
             p1_first = p1
             p2_last = p2
             self.path = interpolate_path(p1, p2, self.numImages)
+        ensure_atom_ids(self.path)
         calc = p1_first.calc
         for i in range(1, n):
             self.path[i].calc = calc
         if (not self.parallel) or (self.parallel and self.rank == 0):
             os.makedirs(self.xyz_dir, exist_ok=True)
-            io.write(os.path.join(self.xyz_dir, "iter_0000.xyz"), self.path, format="extxyz")
+            snapshots = []
+            for i, img in enumerate(self.path):
+                snap = img.copy()
+                snap.calc = None
+                snap.info = deepcopy(getattr(img, "info", {}))
+                snap.info.pop("spatial_map_order", None)
+                snap.info["neb_image"] = i
+                snapshots.append(snap)
+            io.write(
+                os.path.join(self.xyz_dir, "iter_0000.xyz"),
+                snapshots,
+                format="extxyz",
+            )
+            result = save_projected_neb_sequence(
+                snapshots,
+                xyz_dir=self.xyz_dir,
+                iteration=0,
+            )
+            if result.get("status") != "ok":
+                diagnostics_file = result.get("diagnostics_file")
+                print(
+                    "Projected STEM visualization skipped for iter_0000; "
+                    f"see {diagnostics_file}"
+                )
         self.path[0].calc = p1_first.calc
         self.path[n].calc = p2_last.calc
         self.Umaxi = 1

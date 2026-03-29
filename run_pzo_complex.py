@@ -8,8 +8,8 @@ import numpy as np
 from ase.constraints import FixAtoms
 from ase.filters import ExpCellFilter, Filter, StrainFilter, UnitCellFilter
 from ase.io import read
-from mace.calculators import MACECalculator
 from tsase import neb
+from tsase.neb.runtime import load_mace_calculator
 
 
 def str2bool(value):
@@ -146,6 +146,7 @@ def build_filter_factory(args):
 
 def main():
     args = parse_args()
+    MACECalculator = load_mace_calculator()
     if len(args.structures) != len(args.indices):
         raise ValueError("--structures and --indices must have the same length")
     if args.indices[0] != 0 or args.indices[-1] != args.num_images - 1:

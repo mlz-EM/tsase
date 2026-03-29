@@ -1,0 +1,122 @@
+{
+  "config": {
+    "adaptive_springs": false,
+    "charge_map": {
+      "O": -2.0,
+      "Pb": 2.0,
+      "Zr": 4.0
+    },
+    "ci_activation_force": 0.5,
+    "constant_volume": false,
+    "field": null,
+    "field_cartesian": [
+      -0.0166163062,
+      6.207939023116636e-08,
+      0.0
+    ],
+    "field_crystal": [
+      -0.001,
+      0.0,
+      0.0
+    ],
+    "filter_mask": [
+      0,
+      1,
+      0,
+      1,
+      0,
+      1
+    ],
+    "filter_name": "ExpCellFilter",
+    "fmax": 0.01,
+    "hydrostatic_strain": false,
+    "image_update_factors": null,
+    "image_update_iterations": 0,
+    "max_steps": 5000,
+    "method": "ci",
+    "num_images": 27,
+    "output_interval": 200,
+    "plot_property": "P_mag",
+    "restart_from_xyz": null,
+    "spring": 5.0,
+    "spring_max": 20.0,
+    "spring_min": 5.0,
+    "structure_indices": [
+      0,
+      26
+    ]
+  },
+  "created_at": "2026-03-27T22:48:51.404593",
+  "git": {
+    "commit": "6d0a985accc617c02912cd1ed144b418d923c7f2",
+    "status_short": [
+      " D AFE/1_v0.cif",
+      " D AFE/AFE.cif",
+      " D AFE/cluster_001_lowest_energy.cif",
+      " D AFE/cluster_002_lowest_energy.cif",
+      " D AFE/cluster_003_lowest_energy.cif",
+      " D AFE/cluster_004_lowest_energy.cif",
+      " D AFE/cluster_005_lowest_energy.cif",
+      " D AFE/free_cluster_008_lowest_energy.cif",
+      " M energy.py",
+      " M example/run_field_ssneb_example.py",
+      " M example/run_field_ssneb_interpolated.py",
+      " M neb_diagnostics.csv",
+      " M run_pzo_complex.py",
+      " M tsase/neb/__init__.py",
+      " M tsase/neb/minimizer_ssneb.py",
+      " M tsase/neb/ssneb.py",
+      " M tsase/neb/ssneb_utils.py",
+      "?? 1_PZTN982_Pc_80C_relaxed.cif",
+      "?? 25_v0_relaxed.cif",
+      "?? 2_PZTN982_Pbam_20C_relaxed.cif",
+      "?? 3_PZTN973_Pc_80C_relaxed.cif",
+      "?? 4_PZTN973_R3c_20C_relaxed.cif",
+      "?? IM_v0_relaxed.cif",
+      "?? R3c_relaxed.cif",
+      "?? example/AFE_160at.cif",
+      "?? example/Cluster#2_SC.cif",
+      "?? example/FE_160at.cif",
+      "?? example/field_ssneb_runs/",
+      "?? example/iter_2000.xyz",
+      "?? example/translate_neb_xyz_image.py",
+      "?? tsase/neb/runtime.py",
+      "?? tsase/neb/stem_visualization.py"
+    ]
+  },
+  "hostname": "d-7-5-1",
+  "inputs": [
+    {
+      "copied_to": "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/field_ssneb_runs/run_field_ssneb_interpolated_20260327_224811/inputs/image_0000_Pbam_SC_NC.cif",
+      "label": "image_0000",
+      "sha256": "071d005f996ff1dce00cae02a7ad592d5893ffb41058cbe71921fce0f8a7f7ef",
+      "source": "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/Pbam_SC_NC.cif"
+    },
+    {
+      "copied_to": "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/field_ssneb_runs/run_field_ssneb_interpolated_20260327_224811/inputs/image_0026_Cluster#2_SC.cif",
+      "label": "image_0026",
+      "sha256": "693c385cf178d9724bd902b42a97a0cea9cf6955f69e9062062e0e5bcf39d29b",
+      "source": "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/Cluster#2_SC.cif"
+    },
+    {
+      "copied_to": "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/field_ssneb_runs/run_field_ssneb_interpolated_20260327_224811/inputs/model_MACE_model.model",
+      "label": "model",
+      "sha256": "9ee1ad4421e04bdfdb88ee9eadd873f24a1bd40b1358ccf2bf081d7e7f0de231",
+      "source": "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/MACE_model.model"
+    }
+  ],
+  "outputs": {
+    "diagnostics_file": "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/field_ssneb_runs/run_field_ssneb_interpolated_20260327_224811/diagnostics.csv",
+    "log_file": "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/field_ssneb_runs/run_field_ssneb_interpolated_20260327_224811/fe.out",
+    "output_dir": "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/field_ssneb_runs/run_field_ssneb_interpolated_20260327_224811",
+    "polarization_reference": "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/field_ssneb_runs/run_field_ssneb_interpolated_20260327_224811/polarization_reference.cif",
+    "xyz_dir": "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/field_ssneb_runs/run_field_ssneb_interpolated_20260327_224811/xyz"
+  },
+  "prepared_structures": [
+    "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/field_ssneb_runs/run_field_ssneb_interpolated_20260327_224811/prepared_structures/image_0000.extxyz",
+    "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/field_ssneb_runs/run_field_ssneb_interpolated_20260327_224811/prepared_structures/image_0026.extxyz"
+  ],
+  "python_executable": "/home/gridsan/mzhu/.conda/envs/NEB/bin/python",
+  "run_directory": "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/field_ssneb_runs/run_field_ssneb_interpolated_20260327_224811",
+  "script": "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/run_field_ssneb_interpolated.py"
+}

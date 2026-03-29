@@ -12,6 +12,66 @@ from ase import io
 from scipy.optimize import linear_sum_assignment
 from tsase.neb.util import sPBC
 
+NEB_ATOM_ID_ARRAY = "neb_atom_id"
+
+
+def _normalized_atom_ids(image, array_name=NEB_ATOM_ID_ARRAY):
+    if array_name not in image.arrays:
+        return None
+    atom_ids = numpy.array(image.arrays[array_name], dtype=int)
+    if atom_ids.shape != (len(image),):
+        raise ValueError(
+            f"{array_name!r} must have shape ({len(image)},), got {atom_ids.shape}"
+        )
+    if len(numpy.unique(atom_ids)) != len(atom_ids):
+        raise ValueError(f"{array_name!r} must contain unique per-atom identifiers")
+    return atom_ids
+
+
+def ensure_atom_ids(images, reference=None, array_name=NEB_ATOM_ID_ARRAY):
+    """Attach a stable per-atom ID array to one image or a list of images."""
+    if hasattr(images, "get_positions"):
+        images = [images]
+    if not images:
+        return numpy.array([], dtype=int)
+
+    reference_image = images[0] if reference is None else reference
+    reference_ids = _normalized_atom_ids(reference_image, array_name=array_name)
+    if reference_ids is None:
+        reference_ids = numpy.arange(len(reference_image), dtype=int)
+        reference_image.arrays[array_name] = reference_ids.copy()
+
+    for image in images:
+        if len(image) != len(reference_ids):
+            raise ValueError("all images must contain the same number of atoms")
+        image.arrays[array_name] = reference_ids.copy()
+
+    return reference_ids.copy()
+
+
+def reorder_by_atom_ids(reference, candidate, array_name=NEB_ATOM_ID_ARRAY):
+    """Reorder ``candidate`` to match ``reference`` using persistent atom IDs."""
+    reference_ids = _normalized_atom_ids(reference, array_name=array_name)
+    candidate_ids = _normalized_atom_ids(candidate, array_name=array_name)
+    if reference_ids is None or candidate_ids is None:
+        return None
+    if len(reference_ids) != len(candidate_ids):
+        raise ValueError("reference and candidate must contain the same number of atom IDs")
+    if set(reference_ids.tolist()) != set(candidate_ids.tolist()):
+        raise ValueError("restart image atom IDs do not match the current band atom IDs")
+
+    candidate_lookup = {
+        int(atom_id): index for index, atom_id in enumerate(candidate_ids.tolist())
+    }
+    order = numpy.array(
+        [candidate_lookup[int(atom_id)] for atom_id in reference_ids.tolist()],
+        dtype=int,
+    )
+    reordered = candidate[order].copy()
+    reordered.info = dict(getattr(candidate, "info", {}))
+    reordered.arrays[array_name] = reference_ids.copy()
+    return reordered
+
 
 def compute_jacobian(vol1, vol2, natom, weight=1.0):
     """Compute the Jacobian scaling factor for solid-state NEB.
@@ -130,6 +190,9 @@ def spatial_map(reference, candidate):
     reordered = candidate[order].copy()
     reordered.info = dict(getattr(candidate, "info", {}))
     reordered.info["spatial_map_order"] = order.tolist()
+    reference_ids = _normalized_atom_ids(reference, array_name=NEB_ATOM_ID_ARRAY)
+    if reference_ids is not None:
+        reordered.arrays[NEB_ATOM_ID_ARRAY] = reference_ids.copy()
     return reordered
 
 
@@ -157,6 +220,7 @@ def generate_multi_point_path(structures, indices, total_images):
             raise ValueError("indices must be strictly increasing")
 
     reference = structures[0]
+    ensure_atom_ids(reference)
     mapped_structures = [reference.copy()]
     for structure in structures[1:]:
         mapped_structures.append(spatial_map(reference, structure))
@@ -173,19 +237,50 @@ def generate_multi_point_path(structures, indices, total_images):
 
     if len(path) != total_images:
         raise ValueError("interpolation produced an unexpected number of images")
+    ensure_atom_ids(path, reference=reference)
     return path
 
 
-def load_band_configuration_from_xyz(band, xyz_path):
-    """Load image positions and cells from a saved iter_*.xyz file into a band."""
+def load_band_configuration_from_xyz(band, xyz_path, remap=True):
+    """Load image positions and cells from a saved iter_*.xyz file into a band.
+
+    When ``remap`` is true, each frame is reordered to match the atom indexing of
+    the first band image before its geometry is applied. This keeps the spring
+    metric consistent even if a restart file contains a different-but-equivalent
+    ordering for some frames.
+    """
     images = io.read(xyz_path, ":")
     if len(images) != band.numImages:
         raise ValueError(
             f"restart file contains {len(images)} images, expected {band.numImages}"
         )
+
+    reference_image = band.path[0].copy()
+    reference_ids = ensure_atom_ids(reference_image)
     for index, image in enumerate(images):
-        band.path[index].set_cell(image.get_cell(), scale_atoms=False)
-        band.path[index].set_positions(image.get_positions())
+        loaded = image
+        if remap:
+            loaded = reorder_by_atom_ids(reference_image, image)
+            if loaded is None:
+                loaded = spatial_map(reference_image, image)
+        band.path[index].set_cell(loaded.get_cell(), scale_atoms=False)
+        band.path[index].set_positions(loaded.get_positions())
+        band.path[index].arrays[NEB_ATOM_ID_ARRAY] = reference_ids.copy()
+
+    # Refresh cached geometry state immediately so spring forces use the loaded
+    # path rather than the pre-restart interpolation.
+    ensure_atom_ids(band.path, reference=reference_image)
+    for image in band.path:
+        initialize_image_properties(image, band.jacobian)
+
+    if hasattr(band, "_evaluate_image") and hasattr(band, "_finalize_image_state"):
+        for index in (0, band.numImages - 1):
+            band._evaluate_image(index)
+            band._finalize_image_state(index)
+        if hasattr(band, "_update_spring_constants"):
+            band._update_spring_constants()
+        if hasattr(band, "update_image_rates"):
+            band.update_image_rates(0)
 
 
 def initialize_image_properties(image, jacobian):
