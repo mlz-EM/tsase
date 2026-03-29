@@ -109,11 +109,11 @@ def main(argv=None):
         script_path=config.script_path,
         manifest_config=config.manifest_config,
     )
+    workflow_artifacts = result["workflow_artifacts"]
     artifacts = result["artifacts"]
-    final_stage = result["stages"][-1]["artifacts"]
-    print(f"Run directory: {artifacts.run_dir}")
-    print(f"Final stage diagnostics: {final_stage.diagnostics_file}")
-    print(f"Final stage XYZ output: {final_stage.xyz_dir}")
+    print(f"Run directory: {workflow_artifacts.run_dir}")
+    print(f"Final stage diagnostics: {artifacts.diagnostics_file}")
+    print(f"Final stage XYZ output: {artifacts.xyz_dir}")
     return result
 
 

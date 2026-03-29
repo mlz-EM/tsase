@@ -70,6 +70,12 @@ def _write_json(path, payload):
         json.dump(payload, handle, indent=2, sort_keys=True)
 
 
+def _public_artifacts(workflow_artifacts, executed_stages):
+    if not executed_stages:
+        return workflow_artifacts
+    return executed_stages[-1]["artifacts"]
+
+
 def _copy_images_with_calculators(images):
     copied = []
     for image in images:
@@ -208,6 +214,7 @@ def _write_workflow_outputs(
     outcome,
     error_message,
 ):
+    public_artifacts = _public_artifacts(workflow_artifacts, executed_stages)
     summary = {
         "outcome": outcome,
         "run_directory": str(workflow_artifacts.run_dir),
@@ -245,6 +252,13 @@ def _write_workflow_outputs(
         },
         prepared_structures=initial_inputs,
         extra_metadata={
+            "outputs": public_artifacts.as_neb_paths(),
+            "workflow_outputs": {
+                "run_directory": str(workflow_artifacts.run_dir),
+                "workflow_manifest": str(workflow_artifacts.manifest_file),
+                "workflow_summary": str(workflow_artifacts.run_dir / "workflow_summary.json"),
+                "transitions_dir": str(workflow_artifacts.run_dir / "transitions"),
+            },
             "summary_file": str(workflow_artifacts.run_dir / "workflow_summary.json"),
             "transitions_dir": str(workflow_artifacts.run_dir / "transitions"),
             "outcome": outcome,
@@ -589,8 +603,9 @@ def run_staged_ssneb(
         outcome=outcome,
         error_message=error_message,
     )
+    public_artifacts = _public_artifacts(workflow_artifacts, executed_stages)
     return {
-        "artifacts": workflow_artifacts,
+        "artifacts": public_artifacts,
         "workflow_artifacts": workflow_artifacts,
         "workflow_summary": summary,
         "stages": executed_stages,

@@ -83,6 +83,7 @@ class StagedWorkflowTests(unittest.TestCase):
             self.assertEqual(result["stages"][0]["exit_reason"], "remesh_triggered")
             self.assertFalse(result["stages"][0]["ci_active"])
             self.assertEqual(result["stages"][1]["exit_reason"], "final_converged")
+            self.assertEqual(Path(result["artifacts"].run_dir), Path(result["stages"][-1]["artifacts"].run_dir))
             self.assertTrue((output_dir / "workflow_manifest.json").exists())
             self.assertTrue((output_dir / "workflow_summary.json").exists())
             self.assertTrue((output_dir / "stage_00" / "run_manifest.json").exists())
@@ -91,6 +92,13 @@ class StagedWorkflowTests(unittest.TestCase):
             self.assertTrue((output_dir / "stage_01" / "stage_exit.json").exists())
             self.assertTrue((output_dir / "transitions" / "remesh_00_to_01.json").exists())
             self.assertTrue((output_dir / "transitions" / "remesh_00_to_01.xyz").exists())
+            with (output_dir / "workflow_manifest.json").open("r", encoding="utf-8") as handle:
+                manifest = json.load(handle)
+            self.assertEqual(manifest["outputs"]["xyz_dir"], str(result["artifacts"].xyz_dir))
+            self.assertEqual(
+                manifest["workflow_outputs"]["workflow_summary"],
+                str((output_dir / "workflow_summary.json").resolve()),
+            )
 
     def test_final_convergence_is_disabled_before_remesh_completion(self):
         with tempfile.TemporaryDirectory() as tmpdir:
