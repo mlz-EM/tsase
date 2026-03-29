@@ -424,12 +424,40 @@ def _resolve_output_settings(outputs_config):
     diagnostics = dict(outputs_config.get("diagnostics", {}))
     energy_profile = dict(outputs_config.get("energy_profile", {}))
     stem = dict(outputs_config.get("stem", {}))
-    return {
+    settings = {
         "diagnostics": bool(diagnostics.get("enabled", True)),
         "path_snapshots": bool(path_snapshot.get("enabled", True)),
         "energy_profile": bool(energy_profile.get("enabled", True)),
         "stem": bool(stem.get("enabled", False)),
         "final_path_snapshot": bool(dict(path_snapshot.get("schedule", {})).get("include_final", True)),
+    }
+    if "plot_property" in energy_profile:
+        settings["plot_property"] = energy_profile["plot_property"]
+    return settings
+
+
+def _serialize_output_settings(output_settings, *, output_interval):
+    settings = dict(output_settings or {})
+    energy_profile = {
+        "enabled": bool(settings.get("energy_profile", True)),
+    }
+    if "plot_property" in settings:
+        energy_profile["plot_property"] = settings["plot_property"]
+    return {
+        "path_snapshot": {
+            "enabled": bool(settings.get("path_snapshots", True)),
+            "schedule": {
+                "every": int(output_interval),
+                "include_final": bool(settings.get("final_path_snapshot", True)),
+            },
+        },
+        "diagnostics": {
+            "enabled": bool(settings.get("diagnostics", True)),
+        },
+        "energy_profile": energy_profile,
+        "stem": {
+            "enabled": bool(settings.get("stem", False)),
+        },
     }
 
 
@@ -612,7 +640,12 @@ class FieldSSNEBConfig:
             "output_interval": int(output_interval),
         }
         if "plot_property" in optimizer_config:
-            optimizer_kwargs["plot_property"] = optimizer_config["plot_property"]
+            raise ValueError(
+                "optimizer.plot_property is no longer supported; "
+                "move it to outputs.energy_profile.plot_property"
+            )
+        if "plot_property" in output_settings:
+            optimizer_kwargs["plot_property"] = output_settings["plot_property"]
 
         resolved_config = _deep_update(
             dict(mapping),
@@ -638,7 +671,10 @@ class FieldSSNEBConfig:
                         "value": [float(value) for value in np.asarray(field_vector, dtype=float)],
                     },
                 },
-                "outputs": dict(output_settings),
+                "outputs": _serialize_output_settings(
+                    output_settings,
+                    output_interval=output_interval,
+                ),
             },
         )
 

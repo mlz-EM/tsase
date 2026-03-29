@@ -2,11 +2,72 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from ase import Atoms, io
+
 from examples.preprocess_field_ssneb_control_points import main as preprocess_main
 from examples.run_field_ssneb_interpolated import main
+from tsase.neb.workflows.config import load_field_ssneb_config, load_yaml_file
 
 
 class FieldWorkflowExampleTests(unittest.TestCase):
+    def test_maintained_example_declares_staging_and_energy_profile_plot_property(self):
+        config_path = Path(__file__).resolve().parents[1] / "examples" / "configs" / "run_field_ssneb_interpolated.yaml"
+        raw = load_yaml_file(config_path)
+
+        self.assertIn("staging", raw)
+        self.assertTrue(raw["staging"]["remesh"])
+        self.assertEqual(raw["outputs"]["energy_profile"]["plot_property"], "p_mag")
+
+    def test_smoke_config_routes_plot_property_through_outputs(self):
+        smoke_config = Path(__file__).resolve().parents[1] / "examples" / "configs" / "run_field_ssneb_interpolated_smoke.yaml"
+        resolved = load_field_ssneb_config(smoke_config)
+
+        self.assertEqual(resolved.optimizer_kwargs["plot_property"], "px")
+        self.assertEqual(len(resolved.remesh_stages), 1)
+
+    def test_optimizer_plot_property_is_rejected_in_yaml(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            start_path = Path(tmpdir) / "start.xyz"
+            end_path = Path(tmpdir) / "end.xyz"
+            io.write(
+                start_path,
+                Atoms("Cu2", positions=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], cell=[5.0, 5.0, 5.0], pbc=True),
+                format="extxyz",
+            )
+            io.write(
+                end_path,
+                Atoms("Cu2", positions=[[0.2, 0.0, 0.0], [1.2, 0.0, 0.0]], cell=[5.0, 5.0, 5.0], pbc=True),
+                format="extxyz",
+            )
+            config_path = Path(tmpdir) / "bad_config.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "path:",
+                        "  source:",
+                        "    kind: control_points",
+                        "    files:",
+                        "      - start.xyz",
+                        "      - end.xyz",
+                        "    indices: [0, 2]",
+                        "  num_images: 3",
+                        "model:",
+                        "  calculator:",
+                        "    kind: emt",
+                        "  charges:",
+                        "    kind: array",
+                        "    values: [1.0, -1.0]",
+                        "optimizer:",
+                        "  plot_property: px",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "outputs.energy_profile.plot_property"):
+                load_field_ssneb_config(config_path)
+
     def test_preprocess_example_smoke(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             preprocess_dir = Path(tmpdir) / "preprocessed"
