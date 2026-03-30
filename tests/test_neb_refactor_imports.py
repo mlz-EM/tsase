@@ -1,4 +1,5 @@
 import unittest
+from importlib import import_module
 
 from tsase import neb
 
@@ -19,21 +20,33 @@ class NebRefactorImportTests(unittest.TestCase):
         self.assertIsNotNone(neb.OutputManager)
         self.assertEqual(neb.NEB_ATOM_ID_ARRAY, "neb_atom_id")
         self.assertIsNotNone(neb.EnthalpyWrapper)
+        self.assertIsNotNone(neb.analyze_stem_sequence_from_xyz)
 
     def test_direct_module_exports_resolve(self):
         from tsase.neb.field import EnthalpyWrapper
         from tsase.neb.filtering import make_filter_adapter
-        from tsase.neb.minimizer_ssneb import minimizer_ssneb
-        from tsase.neb.ssneb import ssneb
-        from tsase.neb.ssneb_utils import load_band_configuration_from_xyz
-        from tsase.neb.stem_visualization import save_projected_neb_sequence
+        from tsase.neb.optimize.base import minimizer_ssneb
+        from tsase.neb.core.band import ssneb
+        from tsase.neb.viz import analyze_stem_sequence_from_xyz, save_projected_neb_sequence
 
         self.assertIs(EnthalpyWrapper, neb.EnthalpyWrapper)
         self.assertTrue(callable(make_filter_adapter))
         self.assertIsNotNone(minimizer_ssneb)
         self.assertEqual(ssneb.__module__, "tsase.neb.core.band")
-        self.assertIs(load_band_configuration_from_xyz, neb.load_band_configuration_from_xyz)
+        self.assertIs(analyze_stem_sequence_from_xyz, neb.analyze_stem_sequence_from_xyz)
         self.assertIs(save_projected_neb_sequence, neb.save_projected_neb_sequence)
+
+    def test_removed_legacy_shims_are_not_importable(self):
+        for module_name in (
+            "tsase.neb.ssneb",
+            "tsase.neb.fire_ssneb",
+            "tsase.neb.minimizer_ssneb",
+            "tsase.neb.ssneb_utils",
+            "tsase.neb.stem_visualization",
+            "tsase.neb.pssneb",
+        ):
+            with self.assertRaises(ModuleNotFoundError):
+                import_module(module_name)
 
 
 if __name__ == "__main__":

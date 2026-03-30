@@ -1,6 +1,7 @@
 """Normalized runtime interfaces for the refactored NEB codebase."""
 
 from dataclasses import dataclass
+from typing import Optional
 
 from .path import generate_multi_point_path, interpolate_path
 
@@ -10,8 +11,8 @@ class ImageEvalResult:
     """One complete per-image evaluation payload."""
 
     u: float
-    base_u: float
-    field_u: float
+    base_u: Optional[float]
+    field_u: Optional[float]
     f: object
     st: object
     dipole: object

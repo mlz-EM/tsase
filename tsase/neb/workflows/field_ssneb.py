@@ -40,15 +40,19 @@ def run_field_ssneb(*, config=None, **unexpected_kwargs):
 
     resolved = config
     prepared = prepare_field_images(resolved.structures, resolved.charge_map, resolved.calculator)
-    polarization_reference = spatial_map(prepared[0], resolved.reference_atoms)
-    wrapped_calc = EnthalpyWrapper(
-        resolved.calculator,
-        field=resolved.field_vector,
-        reference_atoms=polarization_reference,
-        charges=build_charge_array(prepared[0], charge_map=resolved.charge_map),
-    )
+    if resolved.calculator_mode.requires_reference_polarization:
+        polarization_reference = spatial_map(prepared[0], resolved.reference_atoms)
+        runtime_calc = EnthalpyWrapper(
+            resolved.calculator,
+            field=resolved.field_vector,
+            reference_atoms=polarization_reference,
+            charges=build_charge_array(prepared[0], charge_map=resolved.charge_map),
+        )
+    else:
+        runtime_calc = resolved.calculator
     for atoms in prepared:
-        atoms.calc = wrapped_calc
+        atoms.calc = runtime_calc
+        atoms.info["tsase_calculator_mode"] = resolved.calculator_mode.kind
 
     result = run_staged_ssneb(
         structures=prepared,

@@ -16,6 +16,7 @@ import sys
 from ase import io
 
 from .diagnostics import append_diagnostics_rows, initialize_diagnostics_file
+from .energy_profile import ENTRY_METADATA
 
 
 def _sha256sum(path):
@@ -120,6 +121,9 @@ class OutputManager:
             "diagnostics": True,
             "path_snapshots": True,
             "energy_profile": True,
+            "energy_profile_csv": True,
+            "energy_profile_plot": True,
+            "energy_profile_entries": ["enthalpy_adjusted", "intrinsic_energy", "field_energy", "polarization_mag"],
             "stem": False,
             "final_path_snapshot": True,
         }
@@ -310,7 +314,7 @@ class OutputManager:
             images.append(snapshot)
         return images
 
-    def write_path_snapshot(self, path, iteration, save_projected_neb_sequence):
+    def write_path_snapshot(self, path, iteration, stem_sequence_writer):
         if not self.is_active or not self.settings["path_snapshots"]:
             return None
         self.paths.path_dir.mkdir(parents=True, exist_ok=True)
@@ -318,10 +322,11 @@ class OutputManager:
         outfile = self.paths.path_dir / f"iter_{int(iteration):04d}.xyz"
         io.write(str(outfile), images, format="extxyz")
         if self.settings["stem"]:
-            result = save_projected_neb_sequence(
-                images,
-                xyz_dir=self.paths.stem_dir,
+            result = stem_sequence_writer(
+                xyz_file=outfile,
+                output_dir=self.paths.stem_dir,
                 iteration=iteration,
+                emit_npy=False,
             )
             if isinstance(result, dict) and result.get("status") != "ok":
                 diagnostics_file = result.get("diagnostics_file")
@@ -339,36 +344,32 @@ class OutputManager:
         io.write(str(outfile), self.make_snapshot_images(path), format="extxyz")
         return str(outfile)
 
-    def write_energy_profile_csv(self, iteration, rows):
-        if not self.is_active or not self.settings["energy_profile"]:
+    def write_energy_profile_csv(self, iteration, entries, rows):
+        if (
+            not self.is_active
+            or not self.settings["energy_profile"]
+            or not self.settings["energy_profile_csv"]
+            or not entries
+        ):
             return None
         self.paths.energy_dir.mkdir(parents=True, exist_ok=True)
         outfile = self.paths.energy_dir / f"profile_iter_{int(iteration):04d}.csv"
-        header = [
-            "image",
-            "enthalpy_mev_per_atom",
-            "base_energy_mev_per_atom",
-            "field_energy_mev_per_atom",
-            "polarization_magnitude_c_per_m2",
-        ]
+        header = ["image"] + [ENTRY_METADATA[entry]["csv_header"] for entry in entries]
         lines = [",".join(header)]
         for row in rows:
-            lines.append(
-                ",".join(
-                    [
-                        str(int(row["image"])),
-                        f"{float(row['enthalpy_mev_per_atom']):.16e}",
-                        f"{float(row['base_energy_mev_per_atom']):.16e}",
-                        f"{float(row['field_energy_mev_per_atom']):.16e}",
-                        f"{float(row['polarization_magnitude_c_per_m2']):.16e}",
-                    ]
-                )
-            )
+            values = [str(int(row["image"]))]
+            for entry in entries:
+                values.append(f"{float(row[entry]):.16e}")
+            lines.append(",".join(values))
         outfile.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return str(outfile)
 
     def save_energy_plot(self, fig, iteration):
-        if not self.is_active or not self.settings["energy_profile"]:
+        if (
+            not self.is_active
+            or not self.settings["energy_profile"]
+            or not self.settings["energy_profile_plot"]
+        ):
             return None
         self.paths.energy_dir.mkdir(parents=True, exist_ok=True)
         outfile = self.paths.energy_dir / f"profile_iter_{int(iteration):04d}.png"

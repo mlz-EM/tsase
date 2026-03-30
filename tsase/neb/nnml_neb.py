@@ -19,7 +19,7 @@ from ase.calculators.lj import LennardJones
 from ase.calculators.calculator import Calculator, all_changes
 from ase.calculators.calculator import PropertyNotImplementedError
 from tsase import neb
-from tsase.neb.minimizer_ssneb import minimizer_ssneb
+from tsase.neb.optimize.base import minimizer_ssneb
 from tsase.neb.util import vmag
 
 def make_dir(path):

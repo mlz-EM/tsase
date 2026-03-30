@@ -1,10 +1,15 @@
 """Base optimizer utilities for SSNEB."""
 
 from numpy import dot, sqrt, vdot
+import warnings
 
-from tsase.neb.models.field import POLARIZATION_E_A2_TO_C_M2
+from tsase.neb.io.energy_profile import (
+    ENTRY_METADATA,
+    build_energy_profile_rows,
+    normalize_energy_profile_entries,
+)
 from tsase.neb.util import sPBC, vmag
-from tsase.neb.viz.stem import save_projected_neb_sequence
+from tsase.neb.viz.stem import analyze_stem_sequence_from_xyz
 
 
 class minimizer_ssneb:
@@ -14,64 +19,48 @@ class minimizer_ssneb:
         self,
         band,
         output_interval=1,
+        energy_profile_entries=None,
         plot_property=None,
         image_mobility_rates=None,
     ):
         self.band = band
         self.output = getattr(band, "output", None)
         self.output_interval = max(1, int(output_interval))
-        self.plot_property = self._normalize_plot_property(plot_property)
+        self.energy_profile_entries = self._normalize_energy_profile_entries(
+            energy_profile_entries=energy_profile_entries,
+            plot_property=plot_property,
+        )
         self.image_mobility_rates = {}
         self.set_image_mobility_rates(image_mobility_rates)
 
-    def _normalize_plot_property(self, plot_property):
+    def _normalize_energy_profile_entries(self, *, energy_profile_entries, plot_property):
+        if energy_profile_entries is not None:
+            return normalize_energy_profile_entries(energy_profile_entries)
         if plot_property is None:
-            return None
+            if self.output is not None:
+                configured = self.output.settings.get("energy_profile_entries")
+                if configured is not None:
+                    return normalize_energy_profile_entries(configured)
+            return []
+        warnings.warn(
+            "plot_property is deprecated; use energy_profile_entries instead",
+            stacklevel=3,
+        )
         normalized = str(plot_property).strip().lower()
-        if normalized in {"", "none", "off", "false"}:
-            return None
         aliases = {
-            "px": "px",
-            "py": "py",
-            "pz": "pz",
-            "p_mag": "p_mag",
-            "pmag": "p_mag",
-            "p-magnitude": "p_mag",
-            "p_magnitude": "p_mag",
+            "px": "polarization_x",
+            "py": "polarization_y",
+            "pz": "polarization_z",
+            "p_mag": "polarization_mag",
+            "pmag": "polarization_mag",
+            "p-magnitude": "polarization_mag",
+            "p_magnitude": "polarization_mag",
         }
+        if normalized in {"", "none", "off", "false"}:
+            return []
         if normalized not in aliases:
             raise ValueError("plot_property must be one of: none, Px, Py, Pz, P_mag")
-        return aliases[normalized]
-
-    def _get_plot_series(self):
-        if self.plot_property is None:
-            return None, None
-
-        values = []
-        for img in self.band.path:
-            polarization = getattr(img, "polarization_c_per_m2", None)
-            if polarization is None or len(polarization) != 3:
-                polarization = getattr(img, "polarization", None)
-                if polarization is None or len(polarization) != 3:
-                    return None, None
-                polarization = POLARIZATION_E_A2_TO_C_M2 * polarization
-
-            if self.plot_property == "px":
-                values.append(float(polarization[0]))
-            elif self.plot_property == "py":
-                values.append(float(polarization[1]))
-            elif self.plot_property == "pz":
-                values.append(float(polarization[2]))
-            elif self.plot_property == "p_mag":
-                values.append(float((polarization[0] ** 2 + polarization[1] ** 2 + polarization[2] ** 2) ** 0.5))
-
-        labels = {
-            "px": "Polarization Px (C/m^2)",
-            "py": "Polarization Py (C/m^2)",
-            "pz": "Polarization Pz (C/m^2)",
-            "p_mag": "Polarization |P| (C/m^2)",
-        }
-        return values, labels[self.plot_property]
+        return normalize_energy_profile_entries([aliases[normalized]])
 
     def _should_output(self, iteration, max_iterations, converged):
         return (
@@ -109,11 +98,20 @@ class minimizer_ssneb:
         self.output.write_path_snapshot(
             self.band.path,
             iteration,
-            save_projected_neb_sequence,
+            analyze_stem_sequence_from_xyz,
         )
 
     def _save_energy_plot(self, iteration):
         if self.output is None:
+            return
+        entries, rows, skipped_entries = build_energy_profile_rows(self.band.path, self.energy_profile_entries)
+        if skipped_entries and self.output.is_active:
+            print(
+                "Skipping unavailable energy-profile entries: "
+                + ", ".join(skipped_entries)
+            )
+        self.output.write_energy_profile_csv(iteration, entries, rows)
+        if not entries or not self.output.settings.get("energy_profile_plot", True):
             return
         try:
             import matplotlib
@@ -123,80 +121,54 @@ class minimizer_ssneb:
         except Exception:
             return
 
-        adjusted_energies = []
-        raw_energies = []
-        for img in self.band.path:
-            if hasattr(img, "u"):
-                adjusted_energies.append(float(img.u))
-            else:
-                try:
-                    adjusted_energies.append(float(img.get_potential_energy()))
-                except Exception:
-                    adjusted_energies.append(0.0)
-            raw_energies.append(float(getattr(img, "base_u", adjusted_energies[-1])))
-        natoms = max(1, len(self.band.path[0])) if self.band.path else 1
-        adjusted_reference = adjusted_energies[0] if adjusted_energies else 0.0
-        raw_reference = raw_energies[0] if raw_energies else adjusted_reference
-        rel_adjusted = [1000.0 * (energy - adjusted_reference) / natoms for energy in adjusted_energies]
-        rel_raw = [1000.0 * (energy - raw_reference) / natoms for energy in raw_energies]
-        field_series = [
-            1000.0 * float(getattr(img, "field_u", 0.0)) / natoms
-            for img in self.band.path
-        ]
-        polarization_magnitudes = []
-        for img in self.band.path:
-            polarization = getattr(img, "polarization_c_per_m2", None)
-            if polarization is None or len(polarization) != 3:
-                polarization = getattr(img, "polarization", None)
-                if polarization is None or len(polarization) != 3:
-                    polarization = [0.0, 0.0, 0.0]
-                else:
-                    polarization = POLARIZATION_E_A2_TO_C_M2 * polarization
-            polarization_magnitudes.append(
-                float((polarization[0] ** 2 + polarization[1] ** 2 + polarization[2] ** 2) ** 0.5)
-            )
-        self.output.write_energy_profile_csv(
-            iteration,
-            [
-                {
-                    "image": index,
-                    "enthalpy_mev_per_atom": rel_adjusted[index],
-                    "base_energy_mev_per_atom": rel_raw[index],
-                    "field_energy_mev_per_atom": field_series[index],
-                    "polarization_magnitude_c_per_m2": polarization_magnitudes[index],
-                }
-                for index in range(len(rel_adjusted))
-            ],
-        )
-        x = list(range(len(rel_adjusted)))
+        x = [row["image"] for row in rows]
         fig, ax1 = plt.subplots(figsize=(6, 4))
-        ax1.plot(x, rel_raw, marker="o", linewidth=1.5, color="tab:blue", label="Raw energy")
-        ax1.plot(x, rel_adjusted, marker="^", linewidth=1.5, color="tab:green", label="Field-adjusted enthalpy")
-        ax1.set_xlabel("Image Index")
-        ax1.set_ylabel("Relative Energy - E0 (meV/atom)", color="tab:blue")
-        ax1.tick_params(axis="y", labelcolor="tab:blue")
-        ax1.set_title(f"Relative NEB Energies (iter {iteration})")
-        ax1.grid(True, alpha=0.3)
+        energy_entries = [
+            entry for entry in entries if ENTRY_METADATA[entry]["axis"] == "energy"
+        ]
+        polarization_entries = [
+            entry for entry in entries if ENTRY_METADATA[entry]["axis"] == "polarization"
+        ]
 
-        plot_values, plot_label = self._get_plot_series()
-        lines = list(ax1.get_lines())
-        labels = [line.get_label() for line in lines]
-        if plot_values is not None:
-            ax2 = ax1.twinx()
-            line2, = ax2.plot(
+        primary_axis = ax1
+        secondary_axis = None
+        if not energy_entries and polarization_entries:
+            primary_axis.set_ylabel("Polarization (C/m^2)")
+        elif energy_entries:
+            primary_axis.set_ylabel("Energy (meV/atom)")
+        primary_axis.set_xlabel("Image Index")
+        primary_axis.set_title(f"NEB profile (iter {iteration})")
+        primary_axis.grid(True, alpha=0.3)
+
+        lines = []
+        labels = []
+        for entry in energy_entries or polarization_entries:
+            line, = primary_axis.plot(
                 x,
-                plot_values,
-                marker="s",
-                linewidth=1.3,
-                linestyle="--",
-                color="tab:orange",
-                label=plot_label,
+                [row[entry] for row in rows],
+                marker="o",
+                linewidth=1.5,
+                label=ENTRY_METADATA[entry]["label"],
             )
-            ax2.set_ylabel(plot_label, color="tab:orange")
-            ax2.tick_params(axis="y", labelcolor="tab:orange")
-            lines.append(line2)
-            labels.append(plot_label)
-        ax1.legend(lines, labels, loc="best")
+            lines.append(line)
+            labels.append(ENTRY_METADATA[entry]["label"])
+
+        if energy_entries and polarization_entries:
+            secondary_axis = ax1.twinx()
+            secondary_axis.set_ylabel("Polarization (C/m^2)")
+            for entry in polarization_entries:
+                line, = secondary_axis.plot(
+                    x,
+                    [row[entry] for row in rows],
+                    marker="s",
+                    linewidth=1.3,
+                    linestyle="--",
+                    label=ENTRY_METADATA[entry]["label"],
+                )
+                lines.append(line)
+                labels.append(ENTRY_METADATA[entry]["label"])
+
+        primary_axis.legend(lines, labels, loc="best")
         self.output.save_energy_plot(fig, iteration)
         plt.close(fig)
 

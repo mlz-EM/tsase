@@ -85,7 +85,13 @@ outputs:
     enabled: true
   energy_profile:
     enabled: true
-    plot_property: p_mag
+    emit_csv: true
+    emit_png: true
+    entries:
+      - enthalpy_adjusted
+      - intrinsic_energy
+      - field_energy
+      - polarization_mag
   stem:
     enabled: true
 

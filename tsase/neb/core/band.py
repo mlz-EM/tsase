@@ -12,6 +12,7 @@ from ase import units
 
 from tsase.neb.constraints.adapters import make_filter_adapter
 from tsase.neb.io.manager import OutputManager
+from tsase.neb.models.field import POLARIZATION_E_A2_TO_C_M2
 from tsase.neb.util import sPBC, vmag, vmag2, vproj, vunit
 
 from .geometry import compute_jacobian, image_distance_vector, initialize_image_properties
@@ -171,20 +172,28 @@ class ssneb:
         with self.image_workspace(index):
             u = image.get_potential_energy()
             f = image.get_forces()
-            base_u = float(getattr(image.calc, "results", {}).get("base_energy", u))
-            field_u = float(getattr(image.calc, "results", {}).get("field_energy", 0.0))
+            calculator_mode = str(image.info.get("tsase_calculator_mode", "wrapped_field"))
+            results = getattr(image.calc, "results", {})
+            if calculator_mode == "mace_field":
+                base_u = None
+                field_u = None
+                if "polarization" not in results:
+                    raise ValueError(
+                        "mace_field calculators must populate results['polarization'] "
+                        "for the maintained NEB workflow"
+                    )
+            else:
+                base_u = float(results.get("base_energy", u))
+                field_u = float(results.get("field_energy", 0.0))
             dipole = numpy.array(
-                getattr(image.calc, "results", {}).get("dipole", numpy.zeros(3)),
+                results.get("dipole", numpy.zeros(3)),
                 dtype=float,
             )
-            polarization = numpy.array(
-                getattr(image.calc, "results", {}).get("polarization", numpy.zeros(3)),
-                dtype=float,
-            )
-            polarization_c_per_m2 = numpy.array(
-                getattr(image.calc, "results", {}).get("polarization_c_per_m2", numpy.zeros(3)),
-                dtype=float,
-            )
+            polarization = numpy.array(results.get("polarization", numpy.zeros(3)), dtype=float)
+            polarization_c_per_m2 = results.get("polarization_c_per_m2")
+            if polarization_c_per_m2 is None and polarization.shape == (3,):
+                polarization_c_per_m2 = POLARIZATION_E_A2_TO_C_M2 * polarization
+            polarization_c_per_m2 = numpy.array(polarization_c_per_m2, dtype=float)
             st = numpy.zeros((3, 3))
             if self.ss:
                 stress = image.get_stress()
@@ -204,8 +213,8 @@ class ssneb:
     def _apply_image_result(self, index, result):
         image = self.path[index]
         image.u = float(result.u)
-        image.base_u = float(result.base_u)
-        image.field_u = float(result.field_u)
+        image.base_u = None if result.base_u is None else float(result.base_u)
+        image.field_u = None if result.field_u is None else float(result.field_u)
         image.f = numpy.array(result.f, dtype=float)
         image.st = numpy.array(result.st, dtype=float)
         image.dipole = numpy.array(result.dipole, dtype=float)

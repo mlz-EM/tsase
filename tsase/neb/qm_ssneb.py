@@ -3,7 +3,7 @@ Nudged elastic band quick-min optimizer module
 '''
 
 from .util import vproj,vdot,vmag,vunit
-from .minimizer_ssneb import minimizer_ssneb
+from .optimize.base import minimizer_ssneb
 import numpy as np
 
 class qm_ssneb(minimizer_ssneb):

@@ -7,9 +7,11 @@ The helpers in this module analyze one NEB image at a time in the projected
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 
 import numpy as np
+from ase.io import read
 from scipy.optimize import linear_sum_assignment
 
 _GRID_SIZE = 4
@@ -1103,11 +1105,282 @@ def _format_diagnostics_message(error, frame_index):
     return "\n".join(lines) + "\n"
 
 
+def _failed_stem_sequence_result(
+    *,
+    xyz_path,
+    output_dir,
+    frame_dir,
+    diagnostics_path,
+    emit_diagnostics,
+    frame_index,
+    frames_rendered=0,
+    error,
+):
+    if emit_diagnostics:
+        diagnostics_path.write_text(
+            _format_diagnostics_message(error, frame_index),
+            encoding="utf-8",
+        )
+    return {
+        "status": "failed",
+        "xyz_file": str(xyz_path),
+        "output_dir": str(output_dir),
+        "frame_dir": str(frame_dir),
+        "frames_rendered": int(frames_rendered),
+        "diagnostics_file": str(diagnostics_path),
+    }
+
+
+def _failed_direct_stem_sequence_result(
+    *,
+    frame_dir,
+    diagnostics_path,
+    emit_diagnostics,
+    frame_index,
+    frames_rendered=0,
+    error,
+):
+    if emit_diagnostics:
+        diagnostics_path.write_text(
+            _format_diagnostics_message(error, frame_index),
+            encoding="utf-8",
+        )
+    return {
+        "status": "failed",
+        "frames_rendered": int(frames_rendered),
+        "frame_dir": str(frame_dir),
+        "diagnostics_file": str(diagnostics_path),
+    }
+
+
+def _analyze_projected_sequence(images, *, cutoff_angstrom):
+    analyses = []
+    anchor_pb_plot_grid = None
+    horizontal_pair_family = None
+    for frame_index, atoms in enumerate(images):
+        analysis = analyze_projected_neb_image(
+            atoms,
+            frame_index=frame_index,
+            previous_pb_plot_grid=anchor_pb_plot_grid,
+            horizontal_pair_family=horizontal_pair_family,
+            cutoff_angstrom=cutoff_angstrom,
+        )
+        if anchor_pb_plot_grid is None:
+            anchor_pb_plot_grid = analysis.pb_plot_frac.copy()
+        horizontal_pair_family = analysis.horizontal_pair_family
+        analyses.append(analysis)
+    return analyses
+
+
+def _write_npz_analysis(analyses, output_dir):
+    output_dir = Path(output_dir)
+    npz_path = output_dir / "stem_analysis.npz"
+    metadata_path = output_dir / "stem_analysis_metadata.json"
+    np.savez(
+        npz_path,
+        frame_indices=np.asarray([analysis.frame_index for analysis in analyses], dtype=int),
+        cell_xy=np.asarray([analysis.cell_xy for analysis in analyses], dtype=float),
+        pb_frac=np.asarray([analysis.pb_frac for analysis in analyses], dtype=float),
+        zr_frac=np.asarray([analysis.zr_frac for analysis in analyses], dtype=float),
+        oh_frac=np.asarray([analysis.oh_frac for analysis in analyses], dtype=float),
+        ov_frac=np.asarray([analysis.ov_frac for analysis in analyses], dtype=float),
+        pb_xy=np.asarray([analysis.pb_xy for analysis in analyses], dtype=float),
+        zr_xy=np.asarray([analysis.zr_xy for analysis in analyses], dtype=float),
+        oh_xy=np.asarray([analysis.oh_xy for analysis in analyses], dtype=float),
+        ov_xy=np.asarray([analysis.ov_xy for analysis in analyses], dtype=float),
+        zr_tilt_deg=np.asarray([analysis.zr_tilt_deg for analysis in analyses], dtype=float),
+        pb_displacement_xy=np.asarray([analysis.pb_displacement_xy for analysis in analyses], dtype=float),
+        pb_displacement_minus_mean_xy=np.asarray(
+            [analysis.pb_displacement_minus_mean_xy for analysis in analyses],
+            dtype=float,
+        ),
+    )
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "units": {
+                    "cartesian_coordinates": "angstrom",
+                    "projected_fractional": "fractional_ab",
+                    "zr_tilt_deg": "degrees",
+                    "polar_displacements": "angstrom",
+                },
+                "frame_diagnostics": [analysis.diagnostics for analysis in analyses],
+                "horizontal_pair_family": [analysis.horizontal_pair_family for analysis in analyses],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return str(npz_path), str(metadata_path)
+
+
+def analyze_stem_sequence_from_xyz(
+    xyz_file,
+    *,
+    output_dir=None,
+    iteration=None,
+    emit_png=True,
+    emit_gif=True,
+    emit_npy=True,
+    emit_diagnostics=True,
+    gif_duration_seconds=0.4,
+    cutoff_angstrom=_COLUMN_CUTOFF_ANG,
+):
+    """Analyze a saved XYZ path and emit requested STEM artifacts."""
+
+    xyz_path = Path(xyz_file).expanduser().resolve()
+    destination = (
+        xyz_path.parent / f"{xyz_path.stem}_stem"
+        if output_dir is None
+        else Path(output_dir).expanduser().resolve()
+    )
+    if iteration is not None:
+        destination = destination / f"stem_iter_{int(iteration):04d}"
+    destination.mkdir(parents=True, exist_ok=True)
+    frame_dir = destination / "frames"
+    gif_path = destination / "stem.gif"
+    diagnostics_path = destination / "diagnostics.txt"
+
+    try:
+        images = read(str(xyz_path), ":")
+        analyses = _analyze_projected_sequence(images, cutoff_angstrom=cutoff_angstrom)
+    except StemAnalysisError as error:
+        return _failed_stem_sequence_result(
+            xyz_path=xyz_path,
+            output_dir=destination,
+            frame_dir=frame_dir,
+            diagnostics_path=diagnostics_path,
+            emit_diagnostics=emit_diagnostics,
+            frame_index=getattr(error, "frame_index", 0),
+            error=error,
+        )
+    except Exception as error:
+        return _failed_stem_sequence_result(
+            xyz_path=xyz_path,
+            output_dir=destination,
+            frame_dir=frame_dir,
+            diagnostics_path=diagnostics_path,
+            emit_diagnostics=emit_diagnostics,
+            frame_index=0,
+            error=StemAnalysisError(
+                f"{type(error).__name__}: {error}",
+                diagnostics={"exception_type": type(error).__name__},
+            ),
+        )
+
+    result = {
+        "status": "ok",
+        "xyz_file": str(xyz_path),
+        "output_dir": str(destination),
+        "frame_dir": str(frame_dir),
+        "frames_rendered": len(analyses),
+    }
+    if emit_png:
+        frame_dir.mkdir(parents=True, exist_ok=True)
+        frame_paths = []
+        try:
+            for index, analysis in enumerate(analyses):
+                frame_index = int(getattr(analysis, "frame_index", index))
+                frame_path = frame_dir / f"frame_{frame_index:04d}.png"
+                render_projected_frame(analysis, frame_path)
+                frame_paths.append(str(frame_path))
+        except Exception as error:
+            return _failed_stem_sequence_result(
+                xyz_path=xyz_path,
+                output_dir=destination,
+                frame_dir=frame_dir,
+                diagnostics_path=diagnostics_path,
+                emit_diagnostics=emit_diagnostics,
+                frame_index=frame_index,
+                frames_rendered=len(frame_paths),
+                error=StemAnalysisError(
+                    f"{type(error).__name__}: {error}",
+                    diagnostics={"exception_type": type(error).__name__},
+                ),
+            )
+        result["frames"] = frame_paths
+    if emit_gif:
+        try:
+            import imageio.v2 as imageio
+        except Exception as error:
+            return _failed_stem_sequence_result(
+                xyz_path=xyz_path,
+                output_dir=destination,
+                frame_dir=frame_dir,
+                diagnostics_path=diagnostics_path,
+                emit_diagnostics=emit_diagnostics,
+                frame_index=0,
+                frames_rendered=len(result.get("frames", [])),
+                error=StemAnalysisError(
+                    f"{type(error).__name__}: {error}",
+                    diagnostics={"exception_type": type(error).__name__},
+                ),
+            )
+        if "frames" not in result:
+            frame_dir.mkdir(parents=True, exist_ok=True)
+            frame_paths = []
+            try:
+                for index, analysis in enumerate(analyses):
+                    frame_index = int(getattr(analysis, "frame_index", index))
+                    frame_paths.append(
+                        render_projected_frame(
+                            analysis,
+                            frame_dir / f"frame_{frame_index:04d}.png",
+                        )
+                    )
+            except Exception as error:
+                return _failed_stem_sequence_result(
+                    xyz_path=xyz_path,
+                    output_dir=destination,
+                    frame_dir=frame_dir,
+                    diagnostics_path=diagnostics_path,
+                    emit_diagnostics=emit_diagnostics,
+                    frame_index=frame_index,
+                    frames_rendered=len(frame_paths),
+                    error=StemAnalysisError(
+                        f"{type(error).__name__}: {error}",
+                        diagnostics={"exception_type": type(error).__name__},
+                    ),
+                )
+            result["frames"] = frame_paths
+        try:
+            gif_frames = [imageio.imread(frame_path) for frame_path in result["frames"]]
+            imageio.mimsave(gif_path, gif_frames, duration=gif_duration_seconds)
+        except Exception as error:
+            return _failed_stem_sequence_result(
+                xyz_path=xyz_path,
+                output_dir=destination,
+                frame_dir=frame_dir,
+                diagnostics_path=diagnostics_path,
+                emit_diagnostics=emit_diagnostics,
+                frame_index=0,
+                frames_rendered=len(result.get("frames", [])),
+                error=StemAnalysisError(
+                    f"{type(error).__name__}: {error}",
+                    diagnostics={"exception_type": type(error).__name__},
+                ),
+            )
+        result["gif"] = str(gif_path)
+    if emit_npy:
+        npz_path, metadata_path = _write_npz_analysis(analyses, destination)
+        result["npz"] = npz_path
+        result["metadata"] = metadata_path
+    if diagnostics_path.exists():
+        diagnostics_path.unlink()
+    return result
+
+
 def save_projected_neb_sequence(
     images,
     *,
     xyz_dir,
     iteration,
+    emit_png=True,
+    emit_gif=True,
+    emit_npy=False,
+    emit_diagnostics=True,
     gif_duration_seconds=0.4,
     cutoff_angstrom=_COLUMN_CUTOFF_ANG,
 ):
@@ -1125,23 +1398,35 @@ def save_projected_neb_sequence(
     xyz_dir = Path(xyz_dir)
     xyz_dir.mkdir(parents=True, exist_ok=True)
     frame_dir = xyz_dir / f"stem_iter_{int(iteration):04d}"
-    frame_dir.mkdir(parents=True, exist_ok=True)
     gif_path = xyz_dir / f"stem_iter_{int(iteration):04d}.gif"
     diagnostics_path = xyz_dir / f"stem_iter_{int(iteration):04d}_diagnostics.txt"
 
     try:
-        import imageio.v2 as imageio
+        analyses = _analyze_projected_sequence(images, cutoff_angstrom=cutoff_angstrom)
+    except StemAnalysisError as error:
+        if emit_diagnostics:
+            diagnostics_path.write_text(
+                _format_diagnostics_message(error, 0),
+                encoding="utf-8",
+            )
+        return {
+            "status": "failed",
+            "frames_rendered": 0,
+            "frame_dir": str(frame_dir),
+            "diagnostics_file": str(diagnostics_path),
+        }
     except Exception as error:
-        diagnostics_path.write_text(
-            _format_diagnostics_message(
-                StemAnalysisError(
-                    f"{type(error).__name__}: {error}",
-                    diagnostics={"exception_type": type(error).__name__},
+        if emit_diagnostics:
+            diagnostics_path.write_text(
+                _format_diagnostics_message(
+                    StemAnalysisError(
+                        f"{type(error).__name__}: {error}",
+                        diagnostics={"exception_type": type(error).__name__},
+                    ),
+                    0,
                 ),
-                0,
-            ),
-            encoding="utf-8",
-        )
+                encoding="utf-8",
+            )
         return {
             "status": "failed",
             "frames_rendered": 0,
@@ -1149,62 +1434,94 @@ def save_projected_neb_sequence(
             "diagnostics_file": str(diagnostics_path),
         }
 
-    frame_paths = []
-    anchor_pb_plot_grid = None
-    horizontal_pair_family = None
-
-    try:
-        for frame_index, atoms in enumerate(images):
-            analysis = analyze_projected_neb_image(
-                atoms,
+    result = {
+        "status": "ok",
+        "frames_rendered": len(analyses),
+        "frame_dir": str(frame_dir),
+    }
+    if emit_png:
+        frame_dir.mkdir(parents=True, exist_ok=True)
+        frame_paths = []
+        try:
+            for index, analysis in enumerate(analyses):
+                frame_index = int(getattr(analysis, "frame_index", index))
+                frame_path = frame_dir / f"frame_{frame_index:04d}.png"
+                render_projected_frame(analysis, frame_path)
+                frame_paths.append(str(frame_path))
+        except Exception as error:
+            return _failed_direct_stem_sequence_result(
+                frame_dir=frame_dir,
+                diagnostics_path=diagnostics_path,
+                emit_diagnostics=emit_diagnostics,
                 frame_index=frame_index,
-                previous_pb_plot_grid=anchor_pb_plot_grid,
-                horizontal_pair_family=horizontal_pair_family,
-                cutoff_angstrom=cutoff_angstrom,
-            )
-            if anchor_pb_plot_grid is None:
-                anchor_pb_plot_grid = analysis.pb_plot_frac.copy()
-            horizontal_pair_family = analysis.horizontal_pair_family
-            frame_path = frame_dir / f"frame_{frame_index:04d}.png"
-            render_projected_frame(analysis, frame_path)
-            frame_paths.append(frame_path)
-    except StemAnalysisError as error:
-        diagnostics_path.write_text(
-            _format_diagnostics_message(error, len(frame_paths)),
-            encoding="utf-8",
-        )
-        return {
-            "status": "failed",
-            "frames_rendered": len(frame_paths),
-            "frame_dir": str(frame_dir),
-            "diagnostics_file": str(diagnostics_path),
-        }
-    except Exception as error:
-        diagnostics_path.write_text(
-            _format_diagnostics_message(
-                StemAnalysisError(
+                frames_rendered=len(frame_paths),
+                error=StemAnalysisError(
                     f"{type(error).__name__}: {error}",
                     diagnostics={"exception_type": type(error).__name__},
                 ),
-                len(frame_paths),
-            ),
-            encoding="utf-8",
-        )
-        return {
-            "status": "failed",
-            "frames_rendered": len(frame_paths),
-            "frame_dir": str(frame_dir),
-            "diagnostics_file": str(diagnostics_path),
-        }
-
+            )
+        result["frames"] = frame_paths
+    if emit_gif:
+        try:
+            import imageio.v2 as imageio
+        except Exception as error:
+            return _failed_direct_stem_sequence_result(
+                frame_dir=frame_dir,
+                diagnostics_path=diagnostics_path,
+                emit_diagnostics=emit_diagnostics,
+                frame_index=0,
+                frames_rendered=len(result.get("frames", [])),
+                error=StemAnalysisError(
+                    f"{type(error).__name__}: {error}",
+                    diagnostics={"exception_type": type(error).__name__},
+                ),
+            )
+        if "frames" not in result:
+            frame_dir.mkdir(parents=True, exist_ok=True)
+            frame_paths = []
+            try:
+                for index, analysis in enumerate(analyses):
+                    frame_index = int(getattr(analysis, "frame_index", index))
+                    frame_paths.append(
+                        render_projected_frame(
+                            analysis,
+                            frame_dir / f"frame_{frame_index:04d}.png",
+                        )
+                    )
+            except Exception as error:
+                return _failed_direct_stem_sequence_result(
+                    frame_dir=frame_dir,
+                    diagnostics_path=diagnostics_path,
+                    emit_diagnostics=emit_diagnostics,
+                    frame_index=frame_index,
+                    frames_rendered=len(frame_paths),
+                    error=StemAnalysisError(
+                        f"{type(error).__name__}: {error}",
+                        diagnostics={"exception_type": type(error).__name__},
+                    ),
+                )
+            result["frames"] = frame_paths
+        try:
+            gif_frames = [imageio.imread(frame_path) for frame_path in result["frames"]]
+            imageio.mimsave(gif_path, gif_frames, duration=gif_duration_seconds)
+        except Exception as error:
+            return _failed_direct_stem_sequence_result(
+                frame_dir=frame_dir,
+                diagnostics_path=diagnostics_path,
+                emit_diagnostics=emit_diagnostics,
+                frame_index=0,
+                frames_rendered=len(result.get("frames", [])),
+                error=StemAnalysisError(
+                    f"{type(error).__name__}: {error}",
+                    diagnostics={"exception_type": type(error).__name__},
+                ),
+            )
+        result["gif"] = str(gif_path)
+    if emit_npy:
+        frame_dir.mkdir(parents=True, exist_ok=True)
+        npz_path, metadata_path = _write_npz_analysis(analyses, frame_dir)
+        result["npz"] = npz_path
+        result["metadata"] = metadata_path
     if diagnostics_path.exists():
         diagnostics_path.unlink()
-
-    gif_frames = [imageio.imread(frame_path) for frame_path in frame_paths]
-    imageio.mimsave(gif_path, gif_frames, duration=gif_duration_seconds)
-    return {
-        "status": "ok",
-        "frames_rendered": len(frame_paths),
-        "frame_dir": str(frame_dir),
-        "gif": str(gif_path),
-    }
+    return result

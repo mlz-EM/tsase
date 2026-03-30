@@ -67,7 +67,11 @@ outputs:
     enabled: true
   energy_profile:
     enabled: true
-    plot_property: px
+    emit_csv: true
+    emit_png: true
+    entries:
+      - enthalpy_adjusted
+      - polarization_x
   stem:
     enabled: false
 

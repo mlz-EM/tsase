@@ -1,4 +1,4 @@
-"""Restart helpers for SSNEB bands."""
+"""Legacy restart helpers retained outside the maintained runtime."""
 
 from ase import io
 
@@ -8,6 +8,7 @@ from tsase.neb.core.mapping import ensure_atom_ids, reorder_by_atom_ids, spatial
 
 def load_band_configuration_from_xyz(band, xyz_path, remap=True):
     """Load image positions and cells from a saved iter_*.xyz file into a band."""
+
     images = io.read(xyz_path, ":")
     if len(images) != band.numImages:
         raise ValueError(

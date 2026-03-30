@@ -19,13 +19,17 @@ def initialize_diagnostics_file(path):
 def append_diagnostics_rows(path, iteration, images, frozen_images):
     with open(path, "a", encoding="utf-8") as handle:
         for i, image in enumerate(images):
+            base_u = getattr(image, "base_u", None)
+            field_u = getattr(image, "field_u", 0.0)
+            base_u = float("nan") if base_u is None else float(base_u)
+            field_u = float("nan") if field_u is None else float(field_u)
             handle.write(
                 "{:d},{:d},{:d},{:.16e},{:.16e},{:.16e},{:.16e},{:.16e},{:.16e},{:.16e},{:.16e},{:.16e},{:.16e}\n".format(
                     int(iteration),
                     i,
                     1 if i in frozen_images else 0,
-                    float(getattr(image, "base_u", image.u - getattr(image, "pv", 0.0))),
-                    float(getattr(image, "field_u", 0.0)),
+                    base_u,
+                    field_u,
                     float(getattr(image, "pv", 0.0)),
                     float(image.u),
                     float(getattr(image, "dipole", [0.0, 0.0, 0.0])[0]),

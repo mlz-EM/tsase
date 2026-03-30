@@ -319,7 +319,6 @@ def run_staged_ssneb(
     structure_indices=None,
     num_images,
     remesh_stages=None,
-    restart_xyz=None,
     k=5.0,
     method="ci",
     filter_factory=None,
@@ -340,7 +339,6 @@ def run_staged_ssneb(
     """Run SSNEB as one or more conservative stages with optional remeshing."""
 
     from tsase.neb.core.band import ssneb
-    from tsase.neb.io.restart import load_band_configuration_from_xyz
 
     structures = list(structures)
     remesh_plan = _normalize_remesh_stages(remesh_stages)
@@ -407,8 +405,6 @@ def run_staged_ssneb(
             output_manager=stage_output,
             **band_options,
         )
-        if stage_index == 0 and restart_xyz is not None:
-            load_band_configuration_from_xyz(band, str(restart_xyz))
 
         optimizer = fire_ssneb(
             band,

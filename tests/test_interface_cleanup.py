@@ -9,9 +9,8 @@ from ase.calculators.calculator import Calculator, all_changes
 from ase.calculators.emt import EMT
 
 from tsase.neb.core.band import ssneb
-from tsase.neb.io.restart import load_band_configuration_from_xyz
 from tsase.neb.optimize.fire import fire_ssneb
-from tsase.neb.workflows import FieldSSNEBConfig, run_field_ssneb
+from tsase.neb.workflows import FieldSSNEBConfig, load_field_ssneb_config, run_field_ssneb
 
 
 class WorkspaceWritingCalculator(Calculator):
@@ -96,37 +95,66 @@ class InterfaceCleanupTests(unittest.TestCase):
         with self.assertRaisesRegex(TypeError, "config=FieldSSNEBConfig"):
             run_field_ssneb(structures=[])
 
-    def test_restart_reapplies_endpoint_state(self):
+    def test_full_path_xyz_replaces_restart_xyz_in_maintained_config(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            start = make_atoms(0.0)
-            end = make_atoms(0.5)
-            calc = PositionEnergyCalculator()
-            start.calc = calc
-            end.calc = calc
-            band = ssneb(
-                start,
-                end,
-                numImages=4,
-                output_dir=tmpdir,
-                ss=False,
+            images = [make_atoms(shift) for shift in (0.0, 0.2, 0.4, 0.5)]
+            restart_path = Path(tmpdir) / "saved_path.xyz"
+            io.write(str(restart_path), images, format="extxyz")
+
+            config_path = Path(tmpdir) / "path.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "path:",
+                        "  source:",
+                        "    kind: full_path_xyz",
+                        "    file: saved_path.xyz",
+                        "    remap_on_restart: none",
+                        "model:",
+                        "  calculator:",
+                        "    kind: emt",
+                        "  charges:",
+                        "    kind: array",
+                        "    values: [1.0, -1.0]",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
             )
-            old_u0 = float(band.path[0].u)
-            old_un = float(band.path[-1].u)
 
-            restart_images = [image.copy() for image in band.path]
-            restart_images[0].positions[:, 0] += 1.0
-            restart_images[-1].positions[:, 0] += 2.0
+            resolved = load_field_ssneb_config(config_path)
+            self.assertEqual(resolved.num_images, 4)
+            self.assertTrue(np.allclose(resolved.structures[0].positions, images[0].positions))
+            self.assertTrue(np.allclose(resolved.structures[-1].positions, images[-1].positions))
+
+    def test_restart_xyz_is_rejected_in_maintained_config(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            images = [make_atoms(shift) for shift in (0.0, 0.5)]
             restart_path = Path(tmpdir) / "restart.xyz"
-            io.write(str(restart_path), restart_images, format="extxyz")
+            io.write(str(restart_path), images, format="extxyz")
 
-            load_band_configuration_from_xyz(band, str(restart_path), remap=False)
+            config_path = Path(tmpdir) / "restart.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "path:",
+                        "  source:",
+                        "    kind: restart_xyz",
+                        "    file: restart.xyz",
+                        "model:",
+                        "  calculator:",
+                        "    kind: emt",
+                        "  charges:",
+                        "    kind: array",
+                        "    values: [1.0, -1.0]",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
 
-            self.assertNotEqual(float(band.path[0].u), old_u0)
-            self.assertNotEqual(float(band.path[-1].u), old_un)
-            self.assertAlmostEqual(float(band.path[0].u), np.sum(restart_images[0].positions[:, 0]))
-            self.assertAlmostEqual(float(band.path[-1].u), np.sum(restart_images[-1].positions[:, 0]))
-            self.assertAlmostEqual(float(band.path[0].base_u), float(band.path[0].u))
-            self.assertAlmostEqual(float(band.path[-1].base_u), float(band.path[-1].u))
+            with self.assertRaisesRegex(ValueError, "full_path_xyz"):
+                load_field_ssneb_config(config_path)
 
     def test_optimizer_outputs_stay_under_the_band_output_manager(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -155,6 +183,61 @@ class InterfaceCleanupTests(unittest.TestCase):
             self.assertTrue((Path(band.output.energy_dir) / "profile_iter_0001.png").exists())
             self.assertTrue(Path(band.output.log_file).exists())
             self.assertFalse((Path(band.output.path_dir) / "iter_0000.xyz").exists())
+
+    def test_direct_plot_property_still_overrides_default_entries(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            start = make_atoms(0.0)
+            end = make_atoms(0.5)
+            calc = EMT()
+            start.calc = calc
+            end.calc = calc
+            band = ssneb(
+                start,
+                end,
+                numImages=4,
+                output_dir=Path(tmpdir) / "plot_property_outputs",
+                ss=False,
+                method="normal",
+            )
+            for image in band.path:
+                image.polarization_c_per_m2 = np.array([1.0, 2.0, 3.0], dtype=float)
+            optimizer = fire_ssneb(
+                band,
+                output_interval=1,
+                dt=0.01,
+                dtmax=0.01,
+                plot_property="px",
+            )
+            optimizer.minimize(forceConverged=10.0, maxIterations=1)
+
+            csv_path = Path(band.output.energy_dir) / "profile_iter_0001.csv"
+            header = csv_path.read_text(encoding="utf-8").splitlines()[0]
+            self.assertEqual(header, "image,polarization_x_c_per_m2")
+
+    def test_invalid_direct_energy_profile_entries_fail_fast(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            start = make_atoms(0.0)
+            end = make_atoms(0.5)
+            calc = EMT()
+            start.calc = calc
+            end.calc = calc
+            band = ssneb(
+                start,
+                end,
+                numImages=4,
+                output_dir=Path(tmpdir) / "bad_entries_outputs",
+                ss=False,
+                method="normal",
+            )
+
+            with self.assertRaisesRegex(ValueError, "energy_profile_entries"):
+                fire_ssneb(
+                    band,
+                    output_interval=1,
+                    dt=0.01,
+                    dtmax=0.01,
+                    energy_profile_entries=["polariztion_x"],
+                )
 
 
 if __name__ == "__main__":

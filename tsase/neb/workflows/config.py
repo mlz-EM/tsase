@@ -6,6 +6,7 @@ from ast import literal_eval
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+import warnings
 
 import numpy as np
 from ase.calculators.emt import EMT
@@ -15,6 +16,178 @@ from tsase.neb.core.interfaces import PathSpec
 from tsase.neb.core.mapping import ensure_atom_ids, reorder_by_atom_ids, spatial_map
 from tsase.neb.models.field import resolve_field_vector
 from tsase.neb.runtime import load_mace_calculator
+
+
+_ENERGY_PROFILE_ENTRY_ALIASES = {
+    "enthalpy": "enthalpy_adjusted",
+    "enthalpy_adjusted": "enthalpy_adjusted",
+    "intrinsic_energy": "intrinsic_energy",
+    "base_energy": "intrinsic_energy",
+    "field_energy": "field_energy",
+    "polarization_mag": "polarization_mag",
+    "polarization_magnitude": "polarization_mag",
+    "polarization_x": "polarization_x",
+    "polarization_y": "polarization_y",
+    "polarization_z": "polarization_z",
+    "px": "polarization_x",
+    "py": "polarization_y",
+    "pz": "polarization_z",
+    "p_mag": "polarization_mag",
+    "pmag": "polarization_mag",
+}
+
+
+@dataclass(frozen=True)
+class CalculatorMode:
+    """Resolved calculator semantics for maintained field-aware workflows."""
+
+    kind: str
+    energy_semantics: str
+    polarization_source: str
+    requires_reference_polarization: bool
+    supports_field_decomposition: bool
+    supported_output_entries: tuple[str, ...]
+
+    @classmethod
+    def intrinsic(cls, kind):
+        return cls(
+            kind=str(kind),
+            energy_semantics="intrinsic",
+            polarization_source="wrapper",
+            requires_reference_polarization=True,
+            supports_field_decomposition=True,
+            supported_output_entries=(
+                "enthalpy_adjusted",
+                "intrinsic_energy",
+                "field_energy",
+                "polarization_mag",
+                "polarization_x",
+                "polarization_y",
+                "polarization_z",
+            ),
+        )
+
+    @classmethod
+    def mace_field(cls):
+        return cls(
+            kind="mace_field",
+            energy_semantics="enthalpy_adjusted",
+            polarization_source="results.polarization",
+            requires_reference_polarization=False,
+            supports_field_decomposition=False,
+            supported_output_entries=(
+                "enthalpy_adjusted",
+                "polarization_mag",
+                "polarization_x",
+                "polarization_y",
+                "polarization_z",
+            ),
+        )
+
+
+def _normalize_energy_profile_entries(entries):
+    normalized = []
+    for entry in list(entries or []):
+        key = str(entry).strip().lower()
+        if key not in _ENERGY_PROFILE_ENTRY_ALIASES:
+            choices = ", ".join(sorted(set(_ENERGY_PROFILE_ENTRY_ALIASES.values())))
+            raise ValueError(f"unsupported energy profile entry {entry!r}; expected one of: {choices}")
+        canonical = _ENERGY_PROFILE_ENTRY_ALIASES[key]
+        if canonical not in normalized:
+            normalized.append(canonical)
+    return normalized
+
+
+def _default_energy_profile_entries(calculator_mode):
+    if calculator_mode is not None and calculator_mode.kind == "mace_field":
+        return ["enthalpy_adjusted", "polarization_mag"]
+    return ["enthalpy_adjusted", "intrinsic_energy", "field_energy", "polarization_mag"]
+
+
+def _resolve_energy_profile_settings(energy_profile_config, calculator_mode):
+    energy_profile_config = dict(energy_profile_config or {})
+    enabled = bool(energy_profile_config.get("enabled", True))
+    if "plot_property" in energy_profile_config:
+        raise ValueError(
+            "outputs.energy_profile.plot_property is no longer supported; "
+            "use outputs.energy_profile.entries instead"
+        )
+
+    entries = energy_profile_config.get("entries")
+    requested_entries = (
+        _default_energy_profile_entries(calculator_mode)
+        if entries is None
+        else _normalize_energy_profile_entries(entries)
+    )
+    strict = bool(energy_profile_config.get("strict", False))
+    supported_entries = set(
+        _default_energy_profile_entries(calculator_mode)
+        if calculator_mode is None
+        else calculator_mode.supported_output_entries
+    )
+    unsupported_entries = [entry for entry in requested_entries if entry not in supported_entries]
+    if unsupported_entries and strict:
+        raise ValueError(
+            "outputs.energy_profile.entries requested unsupported values for "
+            f"{calculator_mode.kind if calculator_mode is not None else 'this calculator'}: {unsupported_entries}"
+        )
+    if unsupported_entries:
+        warnings.warn(
+            "Skipping unsupported outputs.energy_profile.entries for "
+            f"{calculator_mode.kind if calculator_mode is not None else 'this calculator'}: {unsupported_entries}",
+            stacklevel=3,
+        )
+    filtered_entries = [entry for entry in requested_entries if entry in supported_entries]
+    return {
+        "enabled": enabled,
+        "emit_csv": bool(energy_profile_config.get("emit_csv", enabled)),
+        "emit_png": bool(energy_profile_config.get("emit_png", enabled)),
+        "entries": filtered_entries,
+        "strict": strict,
+    }
+
+
+def _normalize_express_tensor(tensor):
+    matrix = np.asarray(tensor, dtype=float)
+    if matrix.shape == (6,):
+        xx, yy, zz, yz, xz, xy = matrix.tolist()
+        matrix = np.array(
+            [
+                [xx, xy, xz],
+                [xy, yy, yz],
+                [xz, yz, zz],
+            ],
+            dtype=float,
+        )
+    if matrix.shape != (3, 3):
+        raise ValueError("band.express.tensor must be a 3x3 matrix or 6-value Voigt-like list")
+    normalized = matrix.copy()
+    if abs(normalized[0, 1]) > 1.0e-12 or abs(normalized[0, 2]) > 1.0e-12 or abs(normalized[1, 2]) > 1.0e-12:
+        warnings.warn(
+            "band.express upper-triangular terms are ignored in the maintained SSNEB path",
+            stacklevel=3,
+        )
+    normalized[0, 1] = 0.0
+    normalized[0, 2] = 0.0
+    normalized[1, 2] = 0.0
+    return normalized
+
+
+def _resolve_band_express(band_config):
+    express_config = band_config.get("express")
+    if express_config is None:
+        return None
+    if isinstance(express_config, dict):
+        units = str(express_config.get("units", "gpa")).lower()
+        tensor = express_config.get("tensor")
+    else:
+        units = "gpa"
+        tensor = express_config
+    if tensor is None:
+        raise ValueError("band.express must provide a tensor value")
+    if units != "gpa":
+        raise ValueError("band.express.units must be GPa in the maintained YAML workflow")
+    return _normalize_express_tensor(tensor)
 
 
 def _strip_comment(line):
@@ -260,7 +433,8 @@ def _resolve_path_source(path_config, base_dir):
     source = dict(path_config.get("source", {}))
     kind = str(source.get("kind", "control_points"))
     num_images = int(path_config.get("num_images", 0))
-    remap_mode = str(path_config.get("remap_on_restart", source.get("remap_on_restart", "atom_ids")))
+    remap_value = path_config.get("remap_on_restart", source.get("remap_on_restart", "atom_ids"))
+    remap_mode = "none" if remap_value is None else str(remap_value)
 
     if kind == "control_points":
         file_entries = list(source.get("files", []))
@@ -290,11 +464,17 @@ def _resolve_path_source(path_config, base_dir):
     source_file = _resolve_path(base_dir, file_value)
     images = read(str(source_file), ":")
     if kind == "restart_xyz":
-        images = _normalize_loaded_path(images, remap_mode)
-    elif kind == "full_path_xyz":
-        ensure_atom_ids(images)
+        raise ValueError(
+            "path.source.kind=restart_xyz is no longer part of the maintained runtime; "
+            "use path.source.kind=full_path_xyz instead"
+        )
+    if kind == "full_path_xyz":
+        if remap_mode == "none":
+            ensure_atom_ids(images)
+        else:
+            images = _normalize_loaded_path(images, remap_mode)
     else:
-        raise ValueError("path.source.kind must be one of: control_points, full_path_xyz, restart_xyz")
+        raise ValueError("path.source.kind must be one of: control_points, full_path_xyz")
 
     resolved_num_images = len(images) if num_images == 0 else num_images
     if resolved_num_images != len(images):
@@ -336,18 +516,42 @@ def _resolve_field_settings(field_config):
     raise ValueError("model.field.kind must be one of: none, cartesian, crystal")
 
 
-def _build_calculator(calculator_config, base_dir):
+def _build_calculator(calculator_config, base_dir, *, field_vector=None):
     calculator_config = dict(calculator_config)
     kind = str(calculator_config.get("kind", "emt")).lower()
-    kwargs = {key: value for key, value in calculator_config.items() if key != "kind"}
+    kwargs = {
+        key: value
+        for key, value in calculator_config.items()
+        if key
+        not in {
+            "kind",
+            "energy_semantics",
+            "polarization_source",
+            "requires_reference_polarization",
+        }
+    }
     if kind == "emt":
-        return EMT()
+        return EMT(), CalculatorMode.intrinsic(kind)
     if kind == "mace":
         if "model_path" in kwargs:
             kwargs["model_paths"] = str(_resolve_path(base_dir, kwargs.pop("model_path")))
         MACECalculator = load_mace_calculator()
-        return MACECalculator(**kwargs)
-    raise ValueError("model.calculator.kind must be one of: emt, mace")
+        return MACECalculator(**kwargs), CalculatorMode.intrinsic(kind)
+    if kind == "mace_field":
+        if "model_path" in kwargs:
+            kwargs["model_paths"] = str(_resolve_path(base_dir, kwargs.pop("model_path")))
+        if calculator_config.get("energy_semantics", "enthalpy_adjusted") != "enthalpy_adjusted":
+            raise ValueError("model.calculator.energy_semantics must be enthalpy_adjusted for mace_field")
+        if calculator_config.get("polarization_source", "results.polarization") != "results.polarization":
+            raise ValueError("model.calculator.polarization_source must be results.polarization for mace_field")
+        if bool(calculator_config.get("requires_reference_polarization", False)):
+            raise ValueError("model.calculator.requires_reference_polarization must be false for mace_field")
+        if field_vector is None:
+            field_vector = np.zeros(3, dtype=float)
+        kwargs["electric_field"] = [float(value) for value in np.asarray(field_vector, dtype=float)]
+        MACECalculator = load_mace_calculator()
+        return MACECalculator(**kwargs), CalculatorMode.mace_field()
+    raise ValueError("model.calculator.kind must be one of: emt, mace, mace_field")
 
 
 def _build_filter_factory(filter_config):
@@ -418,21 +622,22 @@ def _resolve_remesh_stages(staging_config):
     return stages
 
 
-def _resolve_output_settings(outputs_config):
+def _resolve_output_settings(outputs_config, calculator_mode=None):
     outputs_config = dict(outputs_config or {})
     path_snapshot = dict(outputs_config.get("path_snapshot", {}))
     diagnostics = dict(outputs_config.get("diagnostics", {}))
-    energy_profile = dict(outputs_config.get("energy_profile", {}))
+    energy_profile = _resolve_energy_profile_settings(outputs_config.get("energy_profile", {}), calculator_mode)
     stem = dict(outputs_config.get("stem", {}))
     settings = {
         "diagnostics": bool(diagnostics.get("enabled", True)),
         "path_snapshots": bool(path_snapshot.get("enabled", True)),
         "energy_profile": bool(energy_profile.get("enabled", True)),
+        "energy_profile_csv": bool(energy_profile.get("emit_csv", energy_profile.get("enabled", True))),
+        "energy_profile_plot": bool(energy_profile.get("emit_png", energy_profile.get("enabled", True))),
+        "energy_profile_entries": list(energy_profile.get("entries", [])),
         "stem": bool(stem.get("enabled", False)),
         "final_path_snapshot": bool(dict(path_snapshot.get("schedule", {})).get("include_final", True)),
     }
-    if "plot_property" in energy_profile:
-        settings["plot_property"] = energy_profile["plot_property"]
     return settings
 
 
@@ -440,9 +645,10 @@ def _serialize_output_settings(output_settings, *, output_interval):
     settings = dict(output_settings or {})
     energy_profile = {
         "enabled": bool(settings.get("energy_profile", True)),
+        "emit_csv": bool(settings.get("energy_profile_csv", settings.get("energy_profile", True))),
+        "emit_png": bool(settings.get("energy_profile_plot", settings.get("energy_profile", True))),
+        "entries": list(settings.get("energy_profile_entries", [])),
     }
-    if "plot_property" in settings:
-        energy_profile["plot_property"] = settings["plot_property"]
     return {
         "path_snapshot": {
             "enabled": bool(settings.get("path_snapshots", True)),
@@ -475,6 +681,7 @@ class FieldSSNEBConfig:
     structure_indices: list
     num_images: int
     calculator: object
+    calculator_mode: object
     charge_map: object
     field_vector: object
     reference_atoms: object
@@ -503,6 +710,7 @@ class FieldSSNEBConfig:
         structure_indices,
         num_images,
         calculator,
+        calculator_mode=None,
         charge_map,
         field=None,
         field_crystal=None,
@@ -523,7 +731,12 @@ class FieldSSNEBConfig:
         manifest_config=None,
     ):
         structures = [atoms.copy() for atoms in structures]
-        reference_atoms = structures[0] if reference_atoms is None else reference_atoms
+        calculator_mode = CalculatorMode.intrinsic("programmatic") if calculator_mode is None else calculator_mode
+        reference_atoms = (
+            None
+            if not calculator_mode.requires_reference_polarization
+            else (structures[0] if reference_atoms is None else reference_atoms)
+        )
         run_dir = Path("field_ssneb_runs") if run_dir is None else Path(run_dir)
         field_vector = resolve_field_vector(
             structures[0].get_cell(),
@@ -538,6 +751,12 @@ class FieldSSNEBConfig:
                 "structure_indices": list(structure_indices),
             },
             "model": {
+                "calculator": {
+                    "kind": calculator_mode.kind,
+                    "energy_semantics": calculator_mode.energy_semantics,
+                    "polarization_source": calculator_mode.polarization_source,
+                    "requires_reference_polarization": calculator_mode.requires_reference_polarization,
+                },
                 "charges": _serialize_charge_map(charge_map),
                 "field": {"kind": "cartesian", "value": [float(value) for value in np.asarray(field_vector)]},
             },
@@ -563,6 +782,7 @@ class FieldSSNEBConfig:
             structure_indices=list(structure_indices),
             num_images=int(num_images),
             calculator=calculator,
+            calculator_mode=calculator_mode,
             charge_map=charge_map,
             field_vector=field_vector,
             reference_atoms=reference_atoms,
@@ -606,21 +826,29 @@ class FieldSSNEBConfig:
             raise ValueError("resolved path definition did not produce the requested number of images")
 
         model_config = dict(mapping.get("model", {}))
-        calculator = _build_calculator(dict(model_config.get("calculator", {})), base_dir)
         charge_map = _resolve_charge_map(dict(model_config.get("charges", {})))
         field_settings = _resolve_field_settings(dict(model_config.get("field", {})))
-        reference_atoms = _resolve_reference_atoms(model_config.get("reference"), base_dir, structures)
         field_vector = resolve_field_vector(
             structures[0].get_cell(),
             field=field_settings["field"],
             field_crystal=field_settings["field_crystal"],
+        )
+        calculator, calculator_mode = _build_calculator(
+            dict(model_config.get("calculator", {})),
+            base_dir,
+            field_vector=field_vector,
+        )
+        reference_atoms = (
+            None
+            if not calculator_mode.requires_reference_polarization
+            else _resolve_reference_atoms(model_config.get("reference"), base_dir, structures)
         )
 
         band_config = dict(mapping.get("band", {}))
         optimizer_config = dict(mapping.get("optimizer", {}))
         convergence_config = dict(optimizer_config.get("convergence", {}))
         ci_activation = dict(optimizer_config.get("ci_activation", {}))
-        output_settings = _resolve_output_settings(mapping.get("outputs"))
+        output_settings = _resolve_output_settings(mapping.get("outputs"), calculator_mode)
 
         output_interval = optimizer_config.get("output_interval")
         if output_interval is None:
@@ -632,20 +860,22 @@ class FieldSSNEBConfig:
         }
         if "tangent" in band_config:
             band_kwargs["tangent"] = band_config["tangent"]
+        express = _resolve_band_express(band_config)
+        if express is not None:
+            band_kwargs["express"] = express
 
         optimizer_kwargs = {
             "maxmove": float(optimizer_config.get("maxmove", 0.1)),
             "dt": float(optimizer_config.get("dt", 0.1)),
             "dtmax": float(optimizer_config.get("dtmax", optimizer_config.get("dt", 0.1))),
             "output_interval": int(output_interval),
+            "energy_profile_entries": list(output_settings.get("energy_profile_entries", [])),
         }
         if "plot_property" in optimizer_config:
             raise ValueError(
                 "optimizer.plot_property is no longer supported; "
-                "move it to outputs.energy_profile.plot_property"
+                "move it to outputs.energy_profile.entries"
             )
-        if "plot_property" in output_settings:
-            optimizer_kwargs["plot_property"] = output_settings["plot_property"]
 
         resolved_config = _deep_update(
             dict(mapping),
@@ -664,13 +894,32 @@ class FieldSSNEBConfig:
                     "structure_indices": structure_indices,
                 },
                 "model": {
-                    "calculator": dict(model_config.get("calculator", {})),
+                    "calculator": _deep_update(
+                        dict(model_config.get("calculator", {})),
+                        {
+                            "kind": calculator_mode.kind,
+                            "energy_semantics": calculator_mode.energy_semantics,
+                            "polarization_source": calculator_mode.polarization_source,
+                            "requires_reference_polarization": calculator_mode.requires_reference_polarization,
+                        },
+                    ),
                     "charges": _serialize_charge_map(charge_map),
                     "field": {
                         "kind": dict(model_config.get("field", {})).get("kind", "none"),
                         "value": [float(value) for value in np.asarray(field_vector, dtype=float)],
                     },
                 },
+                "band": _deep_update(
+                    dict(mapping.get("band", {})),
+                    {}
+                    if express is None
+                    else {
+                        "express": {
+                            "units": "GPa",
+                            "tensor": [[float(value) for value in row] for row in express],
+                        }
+                    },
+                ),
                 "outputs": _serialize_output_settings(
                     output_settings,
                     output_interval=output_interval,
@@ -683,6 +932,7 @@ class FieldSSNEBConfig:
             structure_indices=structure_indices,
             num_images=num_images,
             calculator=calculator,
+            calculator_mode=calculator_mode,
             charge_map=charge_map,
             field_vector=field_vector,
             reference_atoms=reference_atoms,
