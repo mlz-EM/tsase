@@ -163,7 +163,7 @@ class StagedWorkflowTests(unittest.TestCase):
             self.assertEqual(summary["error"], "stage boom")
             self.assertEqual(stage_exit["exit_reason"], "error")
 
-    def test_stage_exit_always_writes_final_xyz_and_plot_outputs(self):
+    def test_stage_exit_always_writes_final_cif_and_plot_outputs(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir) / "stage_outputs"
             result = neb.run_staged_ssneb(
@@ -189,7 +189,7 @@ class StagedWorkflowTests(unittest.TestCase):
             )
 
             first_stage_artifacts = result["stages"][0]["artifacts"]
-            self.assertTrue((Path(first_stage_artifacts.path_dir) / "iter_0001.xyz").exists())
+            self.assertTrue((Path(first_stage_artifacts.path_dir) / "iter_0001.cif").exists())
             self.assertTrue((Path(first_stage_artifacts.energy_dir) / "profile_iter_0001.png").exists())
 
     def test_staged_run_supports_multiple_optimizer_kinds(self):
@@ -216,7 +216,7 @@ class StagedWorkflowTests(unittest.TestCase):
                 )
 
                 self.assertEqual(result["optimizer"].__class__.__name__, expected_class)
-                self.assertTrue((Path(result["artifacts"].path_dir) / "iter_0001.xyz").exists())
+                self.assertTrue((Path(result["artifacts"].path_dir) / "iter_0001.cif").exists())
 
 
 if __name__ == "__main__":

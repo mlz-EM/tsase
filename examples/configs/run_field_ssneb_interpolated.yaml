@@ -6,16 +6,21 @@ path:
   source:
     kind: control_points
     files:
-      - "../../example/Pbam_SC_NC.cif"
-      - "../../example/Cluster#2_SC.cif"
-    indices: [0, 10]
-  num_images: 11
+      - "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/examples/structures/AFE_aligned_field_relax/structures/field_0003.cif"
+      - "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/examples/structures/FEm_aligned_field_relax/structures/field_0003.cif"
+      - "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/examples/structures/7-25-50_relaxed.cif"
+      - "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/examples/structures/7-25-50_field_relax/structures/field_0003.cif"
+    indices: [0, 5, 10, 15]
+  num_images: 16
 
 model:
   calculator:
-    kind: mace
-    model_path: "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/MACE_model.model"
+    kind: mace_field
+    model_path: "/home/gridsan/mzhu/Project/qe_examples/PZO/260311_ML/mace_field_transfer/runs/20260406_154128_nc_success/models/MACEField-finetuned.model"
     device: cuda
+    head: ft_head
+    default_dtype: float32
+
   charges:
     kind: species_map
     values:
@@ -23,21 +28,20 @@ model:
       Zr: 4.0
       O: -2.0
   field:
-    kind: crystal
-    value: [-0.001, 0.0, 0.0]
+    kind: cartesian
+    value: [-0.001,  0.01, 0.0]
   reference:
     kind: file
     file: ../../example/Pm-3m.cif
 
 band:
-  spring: 5.0
-  method: ci
+  spring: 1.0
+  method: normal
   ss: true
   weight: 1.0
 
 constraints:
   filter:
-    kind: ExpCellFilter
     mask: [0, 1, 0, 1, 0, 1]
     hydrostatic_strain: false
     constant_volume: false
@@ -47,9 +51,9 @@ optimizer:
   dt: 0.10
   dtmax: 0.10
   maxmove: 0.10
-  output_interval: 200
+  output_interval: 50
   convergence:
-    fmax: 0.01
+    fmax: 0.02
     max_steps: 5000
   ci_activation:
     force: 0.5
@@ -68,7 +72,7 @@ staging:
     - target_num_images: 51
       trigger:
         kind: stabilized_perp_force
-        min_iterations: 20
+        min_iterations: 200
         relative_drop: 0.3
         window: 5
         plateau_tolerance: 0.05
@@ -79,7 +83,7 @@ outputs:
   path_snapshot:
     enabled: true
     schedule:
-      every: 200
+      every: 50
       include_final: true
   diagnostics:
     enabled: true
@@ -99,7 +103,7 @@ preprocess:
   output_dir: ../../example/preprocessed/run_field_ssneb_interpolated
   relax:
     enabled: true
-    fmax: 0.02
+    fmax: 0.05
   reference:
     symmetrize: true
     symprec: 1.0

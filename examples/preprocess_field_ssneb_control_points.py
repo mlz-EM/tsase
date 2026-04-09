@@ -34,6 +34,14 @@ def main(argv=None):
         print(f"Reference space group: {result['space_group']}")
     print(f"Preprocessed inputs: {result['output_dir']}")
     print(f"Derived config: {result['processed_config']}")
+    endpoint_stem = result.get("endpoint_stem")
+    if endpoint_stem is not None:
+        if endpoint_stem.get("status") == "ok":
+            print(f"Endpoint STEM frames: {endpoint_stem['frame_dir']}")
+            if endpoint_stem.get("gif") is not None:
+                print(f"Endpoint STEM gif: {endpoint_stem['gif']}")
+        else:
+            print(f"Endpoint STEM diagnostics: {endpoint_stem.get('diagnostics_file')}")
     return result
 
 

@@ -10,7 +10,10 @@ from ase.io import read
 from ase.optimize import BFGS
 from ase.spacegroup.symmetrize import get_symmetrized_atoms
 
+from tsase.neb.core.mapping import spatial_map
 from tsase.neb.models.charges import attach_field_charges
+from tsase.neb.util import sPBC
+from tsase.neb.viz import save_projected_neb_sequence
 
 from .config import dump_yaml, load_field_ssneb_config, load_yaml_file
 
@@ -36,6 +39,26 @@ def validate_ssneb_cell_orientation(atoms, label):
         )
 
 
+def align_translation_only(reference, candidate):
+    """Align ``candidate`` to ``reference`` using only a periodic translation."""
+
+    aligned = spatial_map(reference, candidate)
+
+    reference_frac = np.asarray(reference.get_scaled_positions(), dtype=float)
+    candidate_frac = np.asarray(aligned.get_scaled_positions(), dtype=float)
+    shift_frac = -np.mean(sPBC(candidate_frac - reference_frac), axis=0)
+
+    aligned.set_scaled_positions(candidate_frac + shift_frac)
+
+    residual_frac = sPBC(np.asarray(aligned.get_scaled_positions(), dtype=float) - reference_frac)
+    residual_cart = residual_frac @ np.asarray(reference.get_cell(), dtype=float)
+    aligned.info["translation_alignment_shift_fractional"] = [float(value) for value in shift_frac]
+    aligned.info["translation_alignment_rms_cart"] = float(
+        np.sqrt(np.mean(np.sum(residual_cart**2, axis=1)))
+    )
+    return aligned
+
+
 def _copy_calculator(calculator):
     try:
         return deepcopy(calculator)
@@ -50,7 +73,7 @@ def _preprocess_settings(raw_config):
     outputs = dict(preprocess.get("outputs", {}))
     return {
         "output_dir": preprocess.get("output_dir"),
-        "relax_endpoints": bool(relax.get("enabled", True)),
+        "relax_control_points": bool(relax.get("enabled", True)),
         "relax_fmax": float(relax.get("fmax", 0.02)),
         "symmetrize_reference": bool(reference.get("symmetrize", True)),
         "reference_symprec": float(reference.get("symprec", 1.0)),
@@ -74,6 +97,16 @@ def _build_polarization_reference(atoms, *, symmetrize, symprec):
     return refined_atoms, getattr(dataset, "international", None)
 
 
+def _render_control_point_stem_visualization(processed_structures, destination_dir):
+    """Render a STEM visualization across all processed control points."""
+
+    return save_projected_neb_sequence(
+        [atoms.copy() for atoms in processed_structures],
+        xyz_dir=Path(destination_dir) / "stem_endpoints",
+        iteration=0,
+    )
+
+
 def preprocess_field_ssneb_control_points(config_path, *, output_dir=None):
     """Generate NEB-ready control-point CIFs and a derived run config."""
 
@@ -95,11 +128,9 @@ def preprocess_field_ssneb_control_points(config_path, *, output_dir=None):
 
     processed_structures = [atoms.copy() for atoms in config.structures]
     filter_factory = config.filter_factory
-    first_index = 0
-    last_index = len(processed_structures) - 1
 
     for index, atoms in enumerate(processed_structures):
-        if settings["relax_endpoints"] and index in {first_index, last_index}:
+        if settings["relax_control_points"]:
             atoms.calc = _copy_calculator(config.calculator)
             relax_target = filter_factory(atoms) if filter_factory is not None else atoms
             optimizer = BFGS(relax_target)
@@ -109,6 +140,12 @@ def preprocess_field_ssneb_control_points(config_path, *, output_dir=None):
         validate_ssneb_cell_orientation(
             atoms,
             f"control point {config.structure_indices[index]}",
+        )
+
+    for index in range(1, len(processed_structures)):
+        processed_structures[index] = align_translation_only(
+            processed_structures[index - 1],
+            processed_structures[index],
         )
 
     processed_paths = []
@@ -126,6 +163,8 @@ def preprocess_field_ssneb_control_points(config_path, *, output_dir=None):
     )
     polarization_reference_path = destination_dir / "polarization_reference.cif"
     polarization_reference.write(polarization_reference_path)
+
+    endpoint_stem = _render_control_point_stem_visualization(processed_structures, destination_dir)
 
     derived_config = deepcopy(raw_config)
     derived_config.setdefault("path", {}).setdefault("source", {})["files"] = [
@@ -145,5 +184,6 @@ def preprocess_field_ssneb_control_points(config_path, *, output_dir=None):
         "processed_config": derived_config_path,
         "processed_control_points": processed_paths,
         "polarization_reference": polarization_reference_path,
+        "endpoint_stem": endpoint_stem,
         "space_group": space_group,
     }
