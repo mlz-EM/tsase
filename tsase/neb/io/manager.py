@@ -319,8 +319,8 @@ class OutputManager:
             return None
         self.paths.path_dir.mkdir(parents=True, exist_ok=True)
         images = self.make_snapshot_images(path)
-        outfile = self.paths.path_dir / f"iter_{int(iteration):04d}.xyz"
-        io.write(str(outfile), images, format="extxyz")
+        outfile = self.paths.path_dir / f"iter_{int(iteration):04d}.cif"
+        io.write(str(outfile), images, format="cif")
         if self.settings["stem"]:
             result = stem_sequence_writer(
                 xyz_file=outfile,
@@ -340,8 +340,8 @@ class OutputManager:
         if not self.is_active or not self.settings["final_path_snapshot"]:
             return None
         self.paths.path_dir.mkdir(parents=True, exist_ok=True)
-        outfile = self.paths.path_dir / "final.xyz"
-        io.write(str(outfile), self.make_snapshot_images(path), format="extxyz")
+        outfile = self.paths.path_dir / "final.cif"
+        io.write(str(outfile), self.make_snapshot_images(path), format="cif")
         return str(outfile)
 
     def write_energy_profile_csv(self, iteration, entries, rows):

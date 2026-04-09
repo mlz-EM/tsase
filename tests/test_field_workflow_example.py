@@ -1,8 +1,10 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from ase import Atoms, io
+from ase.filters import FrechetCellFilter
 
 from examples.preprocess_field_ssneb_control_points import main as preprocess_main
 from examples.run_field_ssneb_interpolated import main
@@ -144,6 +146,164 @@ class FieldWorkflowExampleTests(unittest.TestCase):
             for path in result["processed_control_points"]:
                 self.assertTrue(Path(path).exists())
 
+    def test_preprocess_renders_stem_for_all_processed_control_points(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            preprocess_dir = Path(tmpdir) / "preprocessed"
+            start_path = Path(tmpdir) / "start.xyz"
+            middle_path = Path(tmpdir) / "middle.xyz"
+            end_path = Path(tmpdir) / "end.xyz"
+            for path, shift in ((start_path, 0.0), (middle_path, 0.1), (end_path, 0.2)):
+                io.write(
+                    path,
+                    Atoms(
+                        "Cu2",
+                        positions=[[0.0 + shift, 0.0, 0.0], [1.0 + shift, 0.0, 0.0]],
+                        cell=[5.0, 5.0, 5.0],
+                        pbc=True,
+                    ),
+                    format="extxyz",
+                )
+
+            config_path = Path(tmpdir) / "preprocess_stem.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "run:",
+                        "  root: run",
+                        "path:",
+                        "  source:",
+                        "    kind: control_points",
+                        "    files:",
+                        "      - start.xyz",
+                        "      - middle.xyz",
+                        "      - end.xyz",
+                        "    indices: [0, 1, 2]",
+                        "  num_images: 3",
+                        "model:",
+                        "  calculator:",
+                        "    kind: emt",
+                        "  charges:",
+                        "    kind: array",
+                        "    values: [1.0, -1.0]",
+                        "preprocess:",
+                        "  relax:",
+                        "    enabled: true",
+                        "    fmax: 1.0",
+                        "  reference:",
+                        "    symmetrize: false",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            captured = {}
+
+            def fake_save_projected_neb_sequence(images, *, xyz_dir, iteration, **kwargs):
+                del kwargs
+                captured["images"] = [atoms.copy() for atoms in images]
+                captured["xyz_dir"] = Path(xyz_dir)
+                captured["iteration"] = iteration
+                return {
+                    "status": "ok",
+                    "frame_dir": str(Path(xyz_dir) / "stem_iter_0000"),
+                    "gif": str(Path(xyz_dir) / "stem_iter_0000.gif"),
+                    "frames_rendered": len(images),
+                }
+
+            with mock.patch(
+                "tsase.neb.workflows.preprocess.save_projected_neb_sequence",
+                side_effect=fake_save_projected_neb_sequence,
+            ):
+                result = preprocess_main(
+                    [
+                        "--config",
+                        str(config_path),
+                        "--output-dir",
+                        str(preprocess_dir),
+                    ]
+                )
+
+            self.assertEqual(len(captured["images"]), 3)
+            self.assertEqual(captured["xyz_dir"], preprocess_dir / "stem_endpoints")
+            self.assertEqual(captured["iteration"], 0)
+            self.assertEqual(result["endpoint_stem"]["status"], "ok")
+            self.assertEqual(result["endpoint_stem"]["frames_rendered"], 3)
+
+    def test_preprocess_control_point_relaxation_uses_configured_cell_filter(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            start_path = Path(tmpdir) / "start.xyz"
+            middle_path = Path(tmpdir) / "middle.xyz"
+            end_path = Path(tmpdir) / "end.xyz"
+            for path, shift in ((start_path, 0.0), (middle_path, 0.1), (end_path, 0.2)):
+                io.write(
+                    path,
+                    Atoms(
+                        "Cu2",
+                        positions=[[0.0 + shift, 0.0, 0.0], [1.0 + shift, 0.0, 0.0]],
+                        cell=[5.0, 5.0, 5.0],
+                        pbc=True,
+                    ),
+                    format="extxyz",
+                )
+
+            config_path = Path(tmpdir) / "preprocess_filter.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "run:",
+                        "  root: run",
+                        "path:",
+                        "  source:",
+                        "    kind: control_points",
+                        "    files:",
+                        "      - start.xyz",
+                        "      - middle.xyz",
+                        "      - end.xyz",
+                        "    indices: [0, 1, 2]",
+                        "  num_images: 3",
+                        "model:",
+                        "  calculator:",
+                        "    kind: emt",
+                        "  charges:",
+                        "    kind: array",
+                        "    values: [1.0, -1.0]",
+                        "constraints:",
+                        "  filter:",
+                        "    mask: [0, 1, 0, 1, 0, 1]",
+                        "preprocess:",
+                        "  relax:",
+                        "    enabled: true",
+                        "    fmax: 1.0",
+                        "  reference:",
+                        "    symmetrize: false",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            seen_targets = []
+
+            class RecordingBFGS:
+                def __init__(self, atoms, *args, **kwargs):
+                    del args, kwargs
+                    seen_targets.append(atoms)
+
+                def run(self, fmax):
+                    del fmax
+                    return True
+
+            with mock.patch("tsase.neb.workflows.preprocess.BFGS", RecordingBFGS):
+                preprocess_main(["--config", str(config_path), "--output-dir", str(Path(tmpdir) / "out")])
+
+            self.assertEqual(len(seen_targets), 3)
+            self.assertTrue(all(isinstance(target, FrechetCellFilter) for target in seen_targets))
+            self.assertEqual(
+                seen_targets[0].mask.tolist(),
+                [[0, 1, 0], [1, 1, 1], [0, 1, 0]],
+            )
+
     def test_example_smoke(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir) / "field_example"
@@ -178,7 +338,7 @@ class FieldWorkflowExampleTests(unittest.TestCase):
             self.assertTrue(Path(artifacts.manifest_file).exists())
             self.assertTrue((workflow_output.paths.config_dir / "workflow_summary.json").exists())
             self.assertTrue(Path(artifacts.diagnostics_file).exists())
-            self.assertTrue(Path(artifacts.path_dir, "iter_0001.xyz").exists())
+            self.assertTrue(Path(artifacts.path_dir, "iter_0001.cif").exists())
 
 
 if __name__ == "__main__":

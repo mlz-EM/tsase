@@ -13,3 +13,24 @@ wheels/
 .ipynb_checkpoints
 .vscode
 .DS_Store
+
+# Generated workflow outputs and local experiment artifacts
+example/hysteresis_run/
+hysteresis_loop.png
+
+example/preprocessed*/**/*.cif
+example/preprocessed*/**/*.xyz
+example/preprocessed*/**/*.png
+example/preprocessed*/**/*.gif
+example/preprocessed*/**/*.csv
+example/preprocessed*/**/*.json
+example/preprocessed*/**/*.txt
+example/preprocessed*/**/*.npy
+example/preprocessed*/**/*.npz
+example/preprocessed*/**/fe.out
+
+examples/structures/*_field_relax/
+examples/structures/*_relaxed.cif
+examples/structures/all_field_relax_summary.png
+examples/structures/relaxed*/
+examples/structures/relaxed_w_field/

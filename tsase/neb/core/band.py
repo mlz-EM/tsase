@@ -19,7 +19,7 @@ from .geometry import compute_jacobian, image_distance_vector, initialize_image_
 from .interfaces import ExecutionContext, ImageEvalResult, PathSpec
 from .mapping import ensure_atom_ids
 from .state import stress_to_virial
-from .tangent import energy_weighted_tangent, geometric_tangent
+from .tangent import energy_weighted_tangent
 
 
 class ssneb:
@@ -31,7 +31,6 @@ class ssneb:
         p2,
         numImages=7,
         k=5.0,
-        tangent="new",
         dneb=False,
         dnebOrg=False,
         method="normal",
@@ -46,7 +45,6 @@ class ssneb:
     ):
         self.numImages = numImages
         self.k = k * numImages
-        self.tangent = tangent
         self.dneb = dneb
         self.dnebOrg = dnebOrg
         self.method = method
@@ -271,13 +269,7 @@ class ssneb:
         for i in range(1, self.numImages - 1):
             self.path[i].totalf = numpy.vstack((self.path[i].f, self.path[i].st / self.jacobian))
             self.path[i].realtf = deepcopy(self.path[i].totalf)
-
-            if self.tangent == "old":
-                self.path[i].n = self.path[i + 1].r - self.path[i - 1].r
-            else:
-                self.path[i].n = energy_weighted_tangent(self.path, i)
-                if vmag2(self.path[i].n) <= 1e-30:
-                    self.path[i].n = geometric_tangent(self.path, i)
+            self.path[i].n = energy_weighted_tangent(self.path, i)
 
         if self.context.is_output_owner:
             tangent_header = "{:>10} {:>16} {:>16} {:>12}".format(

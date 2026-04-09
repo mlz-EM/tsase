@@ -550,42 +550,42 @@ def _build_calculator(calculator_config, base_dir, *, field_vector=None):
             field_vector = np.zeros(3, dtype=float)
         kwargs["electric_field"] = [float(value) for value in np.asarray(field_vector, dtype=float)]
         MACECalculator = load_mace_calculator()
-        return MACECalculator(**kwargs), CalculatorMode.mace_field()
+        return MACECalculator(model_type="MACEField", **kwargs), CalculatorMode.mace_field()
     raise ValueError("model.calculator.kind must be one of: emt, mace, mace_field")
 
 
 def _build_filter_factory(filter_config):
     filter_config = dict(filter_config or {})
-    kind = str(filter_config.get("kind", "none"))
-    if kind.lower() == "none":
+    if not filter_config:
+        return None
+    if "kind" in filter_config:
+        raise ValueError(
+            "constraints.filter.kind is no longer supported; "
+            "the maintained YAML workflow always uses FrechetCellFilter"
+        )
+    if not bool(filter_config.get("enabled", True)):
         return None
 
     mask = filter_config.get("mask")
     hydrostatic_strain = bool(filter_config.get("hydrostatic_strain", False))
     constant_volume = bool(filter_config.get("constant_volume", False))
     move_atoms = bool(filter_config.get("move_atoms", True))
-    if not move_atoms and kind in {"ExpCellFilter", "UnitCellFilter"}:
-        raise ValueError(f"{kind} does not support move_atoms=false in the maintained YAML workflow")
-
-    from ase.filters import ExpCellFilter, StrainFilter, UnitCellFilter
-
-    if kind == "ExpCellFilter":
-        return lambda image: ExpCellFilter(
-            image,
-            mask=mask,
-            hydrostatic_strain=hydrostatic_strain,
-            constant_volume=constant_volume,
+    if not move_atoms:
+        raise ValueError(
+            "constraints.filter.move_atoms=false is no longer supported; "
+            "the maintained YAML workflow always uses FrechetCellFilter"
         )
-    if kind == "UnitCellFilter":
-        return lambda image: UnitCellFilter(
-            image,
-            mask=mask,
-            hydrostatic_strain=hydrostatic_strain,
-            constant_volume=constant_volume,
-        )
-    if kind == "StrainFilter":
-        return lambda image: StrainFilter(image, mask=mask)
-    raise ValueError("constraints.filter.kind must be one of: none, ExpCellFilter, UnitCellFilter, StrainFilter")
+
+    from ase.filters import FrechetCellFilter
+
+    exp_cell_factor = filter_config.get("exp_cell_factor")
+    return lambda image: FrechetCellFilter(
+        image,
+        mask=mask,
+        exp_cell_factor=exp_cell_factor,
+        hydrostatic_strain=hydrostatic_strain,
+        constant_volume=constant_volume,
+    )
 
 
 def _resolve_reference_atoms(reference_config, base_dir, structures):
@@ -859,7 +859,9 @@ class FieldSSNEBConfig:
             "weight": float(band_config.get("weight", 1.0)),
         }
         if "tangent" in band_config:
-            band_kwargs["tangent"] = band_config["tangent"]
+            raise ValueError(
+                "band.tangent is no longer supported; the maintained runtime always uses the PE tangent"
+            )
         express = _resolve_band_express(band_config)
         if express is not None:
             band_kwargs["express"] = express

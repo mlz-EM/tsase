@@ -8,6 +8,7 @@ from ase import io
 from ase.calculators.calculator import Calculator, all_changes
 from ase.calculators.emt import EMT
 
+from tsase.neb.constraints.adapters import CellFilterAdapter
 from tsase.neb.core.band import ssneb
 from tsase.neb.optimize.fire import fire_ssneb
 from tsase.neb.workflows import FieldSSNEBConfig, load_field_ssneb_config, run_field_ssneb
@@ -95,6 +96,78 @@ class InterfaceCleanupTests(unittest.TestCase):
         with self.assertRaisesRegex(TypeError, "config=FieldSSNEBConfig"):
             run_field_ssneb(structures=[])
 
+    def test_yaml_constraints_filter_reaches_runtime_band(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            start_path = Path(tmpdir) / "start.xyz"
+            end_path = Path(tmpdir) / "end.xyz"
+            io.write(
+                start_path,
+                Atoms("Cu2", positions=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], cell=[5.0, 5.0, 5.0], pbc=True),
+                format="extxyz",
+            )
+            io.write(
+                end_path,
+                Atoms("Cu2", positions=[[0.2, 0.0, 0.0], [1.2, 0.0, 0.0]], cell=[5.0, 5.0, 5.0], pbc=True),
+                format="extxyz",
+            )
+
+            config_path = Path(tmpdir) / "constraints.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "run:",
+                        "  root: run",
+                        "path:",
+                        "  source:",
+                        "    kind: control_points",
+                        "    files:",
+                        "      - start.xyz",
+                        "      - end.xyz",
+                        "    indices: [0, 2]",
+                        "  num_images: 3",
+                        "model:",
+                        "  calculator:",
+                        "    kind: emt",
+                        "  charges:",
+                        "    kind: array",
+                        "    values: [1.0, -1.0]",
+                        "band:",
+                        "  ss: false",
+                        "  method: normal",
+                        "constraints:",
+                        "  filter:",
+                        "    mask: [0, 1, 0, 1, 0, 1]",
+                        "optimizer:",
+                        "  output_interval: 1",
+                        "  dt: 0.01",
+                        "  dtmax: 0.01",
+                        "  maxmove: 0.01",
+                        "  convergence:",
+                        "    fmax: 10.0",
+                        "    max_steps: 1",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            config = load_field_ssneb_config(config_path)
+            result = run_field_ssneb(config=config)
+
+            self.assertTrue(all(isinstance(adapter, CellFilterAdapter) for adapter in result["band"].image_adapters))
+            self.assertTrue(
+                np.allclose(
+                    result["band"].image_adapters[0].mask,
+                    np.array(
+                        [
+                            [0.0, 1.0, 0.0],
+                            [1.0, 1.0, 1.0],
+                            [0.0, 1.0, 0.0],
+                        ]
+                    ),
+                )
+            )
+
     def test_full_path_xyz_replaces_restart_xyz_in_maintained_config(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             images = [make_atoms(shift) for shift in (0.0, 0.2, 0.4, 0.5)]
@@ -179,10 +252,10 @@ class InterfaceCleanupTests(unittest.TestCase):
             )
             optimizer.minimize(forceConverged=10.0, maxIterations=1)
 
-            self.assertTrue((Path(band.output.path_dir) / "iter_0001.xyz").exists())
+            self.assertTrue((Path(band.output.path_dir) / "iter_0001.cif").exists())
             self.assertTrue((Path(band.output.energy_dir) / "profile_iter_0001.png").exists())
             self.assertTrue(Path(band.output.log_file).exists())
-            self.assertFalse((Path(band.output.path_dir) / "iter_0000.xyz").exists())
+            self.assertFalse((Path(band.output.path_dir) / "iter_0000.cif").exists())
 
     def test_direct_plot_property_still_overrides_default_entries(self):
         with tempfile.TemporaryDirectory() as tmpdir:

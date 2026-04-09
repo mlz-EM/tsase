@@ -1,7 +1,7 @@
 """ASE-filter compatibility helpers for SSNEB image updates."""
 
 import numpy as np
-from ase.filters import ExpCellFilter, Filter, StrainFilter, UnitCellFilter
+from ase.filters import ExpCellFilter, Filter, FrechetCellFilter, StrainFilter, UnitCellFilter
 from ase.stress import voigt_6_to_full_3x3_stress
 
 
@@ -115,15 +115,7 @@ class CellFilterAdapter(ImageFilterAdapter):
 def make_filter_adapter(atoms, filter_object=None):
     if filter_object is None:
         return ImageFilterAdapter(atoms)
-    if isinstance(filter_object, StrainFilter):
-        return CellFilterAdapter(
-            atoms,
-            mask=filter_object.mask,
-            hydrostatic_strain=False,
-            constant_volume=False,
-            move_atoms=False,
-        )
-    if isinstance(filter_object, (ExpCellFilter, UnitCellFilter)):
+    if isinstance(filter_object, FrechetCellFilter):
         return CellFilterAdapter(
             atoms,
             mask=filter_object.mask,
@@ -131,7 +123,11 @@ def make_filter_adapter(atoms, filter_object=None):
             constant_volume=getattr(filter_object, "constant_volume", False),
             move_atoms=True,
         )
+    if isinstance(filter_object, (ExpCellFilter, UnitCellFilter, StrainFilter)):
+        raise TypeError(
+            "unsupported ASE filter type: "
+            f"{type(filter_object).__name__}; maintained cell filters must use FrechetCellFilter"
+        )
     if isinstance(filter_object, Filter):
         return SubsetFilterAdapter(atoms, filter_object)
     raise TypeError(f"unsupported ASE filter type: {type(filter_object).__name__}")
-
