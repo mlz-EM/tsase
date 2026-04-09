@@ -192,6 +192,32 @@ class StagedWorkflowTests(unittest.TestCase):
             self.assertTrue((Path(first_stage_artifacts.path_dir) / "iter_0001.xyz").exists())
             self.assertTrue((Path(first_stage_artifacts.energy_dir) / "profile_iter_0001.png").exists())
 
+    def test_staged_run_supports_multiple_optimizer_kinds(self):
+        expected_classes = {
+            "fire": "fire_ssneb",
+            "qm": "qm_ssneb",
+            "mdmin": "mdmin_ssneb",
+            "bfgs": "bfgs_ssneb",
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            for optimizer_kind, expected_class in expected_classes.items():
+                result = neb.run_staged_ssneb(
+                    structures=[make_atoms(0.0), make_atoms(0.5)],
+                    num_images=5,
+                    k=1.5,
+                    method="normal",
+                    output_dir=root / optimizer_kind,
+                    band_kwargs={"ss": False},
+                    optimizer_kind=optimizer_kind,
+                    optimizer_kwargs={"output_interval": 1},
+                    minimize_kwargs={"forceConverged": 10.0, "maxIterations": 1},
+                )
+
+                self.assertEqual(result["optimizer"].__class__.__name__, expected_class)
+                self.assertTrue((Path(result["artifacts"].path_dir) / "iter_0001.xyz").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

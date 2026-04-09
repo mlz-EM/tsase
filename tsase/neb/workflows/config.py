@@ -15,6 +15,7 @@ from ase.io import read
 from tsase.neb.core.interfaces import PathSpec
 from tsase.neb.core.mapping import ensure_atom_ids, reorder_by_atom_ids, spatial_map
 from tsase.neb.models.field import resolve_field_vector
+from tsase.neb.optimize import build_optimizer_kwargs, normalize_optimizer_kind
 from tsase.neb.runtime import load_mace_calculator
 
 
@@ -693,6 +694,7 @@ class FieldSSNEBConfig:
     image_mobility_rates: object = None
     ci_activation_iteration: Optional[int] = None
     ci_activation_force: Optional[float] = None
+    optimizer_kind: str = "fire"
     band_kwargs: dict = field(default_factory=dict)
     optimizer_kwargs: dict = field(default_factory=dict)
     minimize_kwargs: dict = field(default_factory=dict)
@@ -723,6 +725,7 @@ class FieldSSNEBConfig:
         image_mobility_rates=None,
         ci_activation_iteration=None,
         ci_activation_force=None,
+        optimizer_kind="fire",
         band_kwargs=None,
         optimizer_kwargs=None,
         minimize_kwargs=None,
@@ -738,6 +741,7 @@ class FieldSSNEBConfig:
             else (structures[0] if reference_atoms is None else reference_atoms)
         )
         run_dir = Path("field_ssneb_runs") if run_dir is None else Path(run_dir)
+        optimizer_kind = normalize_optimizer_kind(optimizer_kind)
         field_vector = resolve_field_vector(
             structures[0].get_cell(),
             field=field,
@@ -765,6 +769,7 @@ class FieldSSNEBConfig:
                 "method": str(method),
             },
             "optimizer": {
+                "kind": optimizer_kind,
                 "ci_activation": {
                     "iteration": ci_activation_iteration,
                     "force": ci_activation_force,
@@ -794,6 +799,7 @@ class FieldSSNEBConfig:
             image_mobility_rates=image_mobility_rates,
             ci_activation_iteration=ci_activation_iteration,
             ci_activation_force=ci_activation_force,
+            optimizer_kind=optimizer_kind,
             band_kwargs={} if band_kwargs is None else dict(band_kwargs),
             optimizer_kwargs={} if optimizer_kwargs is None else dict(optimizer_kwargs),
             minimize_kwargs={} if minimize_kwargs is None else dict(minimize_kwargs),
@@ -846,6 +852,7 @@ class FieldSSNEBConfig:
 
         band_config = dict(mapping.get("band", {}))
         optimizer_config = dict(mapping.get("optimizer", {}))
+        optimizer_kind = normalize_optimizer_kind(optimizer_config.get("kind", "fire"))
         convergence_config = dict(optimizer_config.get("convergence", {}))
         ci_activation = dict(optimizer_config.get("ci_activation", {}))
         output_settings = _resolve_output_settings(mapping.get("outputs"), calculator_mode)
@@ -864,18 +871,17 @@ class FieldSSNEBConfig:
         if express is not None:
             band_kwargs["express"] = express
 
-        optimizer_kwargs = {
-            "maxmove": float(optimizer_config.get("maxmove", 0.1)),
-            "dt": float(optimizer_config.get("dt", 0.1)),
-            "dtmax": float(optimizer_config.get("dtmax", optimizer_config.get("dt", 0.1))),
-            "output_interval": int(output_interval),
-            "energy_profile_entries": list(output_settings.get("energy_profile_entries", [])),
-        }
         if "plot_property" in optimizer_config:
             raise ValueError(
                 "optimizer.plot_property is no longer supported; "
                 "move it to outputs.energy_profile.entries"
             )
+        optimizer_kwargs = build_optimizer_kwargs(
+            optimizer_kind,
+            optimizer_config,
+            output_interval=output_interval,
+            energy_profile_entries=output_settings.get("energy_profile_entries", []),
+        )
 
         resolved_config = _deep_update(
             dict(mapping),
@@ -920,6 +926,12 @@ class FieldSSNEBConfig:
                         }
                     },
                 ),
+                "optimizer": _deep_update(
+                    dict(mapping.get("optimizer", {})),
+                    {
+                        "kind": optimizer_kind,
+                    },
+                ),
                 "outputs": _serialize_output_settings(
                     output_settings,
                     output_interval=output_interval,
@@ -944,6 +956,7 @@ class FieldSSNEBConfig:
             image_mobility_rates=dict(optimizer_config.get("image_mobility_rates", {})),
             ci_activation_iteration=ci_activation.get("iteration"),
             ci_activation_force=ci_activation.get("force"),
+            optimizer_kind=optimizer_kind,
             band_kwargs=band_kwargs,
             optimizer_kwargs=optimizer_kwargs,
             minimize_kwargs={

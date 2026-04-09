@@ -43,15 +43,10 @@ class fire_ssneb(minimizer_ssneb):
         self.fa = fa
         self.Nsteps = 0
 
-        i = self.band.numImages - 2
-        j = self.band.natom + 3
-        self.v = np.zeros((i, j, 3))
+        self.v = self._zero_generalized_array()
 
     def step(self):
-        self.band.forces()
-        totalf = self.v.copy()
-        for i in range(1, self.band.numImages - 1):
-            totalf[i - 1] = self.get_image_mobility_rate(i) * self.band.path[i].totalf
+        totalf = self._collect_generalized_forces()
         Power = vdot(totalf, self.v)
 
         if Power > 0.0:
@@ -68,8 +63,10 @@ class fire_ssneb(minimizer_ssneb):
 
         self.v += self.dt * totalf
 
-        for i in range(1, self.band.numImages - 1):
-            dR = self.dt * self.v[i - 1]
+        steps = self._zero_generalized_array()
+        for i in range(self.band.numImages - 2):
+            dR = self.dt * self.v[i]
             if vmag(dR) > self.maxmove:
                 dR = self.maxmove * vunit(dR)
-            self.band.image_adapters[i].apply_step(dR, self.band.jacobian)
+            steps[i] = dR
+        self._apply_generalized_steps(steps)

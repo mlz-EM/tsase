@@ -1,5 +1,6 @@
 """Base optimizer utilities for SSNEB."""
 
+import numpy as np
 from numpy import dot, sqrt, vdot
 import warnings
 
@@ -32,6 +33,13 @@ class minimizer_ssneb:
         )
         self.image_mobility_rates = {}
         self.set_image_mobility_rates(image_mobility_rates)
+
+    @property
+    def generalized_shape(self):
+        return (self.band.numImages - 2, self.band.natom + 3, 3)
+
+    def _zero_generalized_array(self):
+        return np.zeros(self.generalized_shape, dtype=float)
 
     def _normalize_energy_profile_entries(self, *, energy_profile_entries, plot_property):
         if energy_profile_entries is not None:
@@ -91,6 +99,23 @@ class minimizer_ssneb:
 
     def get_image_mobility_rate(self, image_index):
         return float(self.image_mobility_rates.get(int(image_index), 1.0))
+
+    def _collect_generalized_forces(self):
+        self.band.forces()
+        totalf = self._zero_generalized_array()
+        for image_index in range(1, self.band.numImages - 1):
+            totalf[image_index - 1] = (
+                self.get_image_mobility_rate(image_index)
+                * np.array(self.band.path[image_index].totalf, dtype=float)
+            )
+        return totalf
+
+    def _apply_generalized_steps(self, displacements):
+        for image_index in range(1, self.band.numImages - 1):
+            step = np.array(displacements[image_index - 1], dtype=float)
+            if np.allclose(step, 0.0):
+                continue
+            self.band.image_adapters[image_index].apply_step(step, self.band.jacobian)
 
     def _write_iteration_xyz(self, iteration):
         if self.output is None:

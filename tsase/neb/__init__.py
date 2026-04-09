@@ -8,7 +8,9 @@ from tsase.neb.core.remesh import uniform_remesh
 from tsase.neb.io import OutputManager, RunPaths, resolve_output_paths
 from tsase.neb.models.charges import attach_field_charges, build_charge_array
 from tsase.neb.models.field import EnthalpyWrapper, crystal_field_to_cartesian
+from tsase.neb.optimize.bfgs import bfgs_ssneb
 from tsase.neb.optimize.fire import fire_ssneb
+from tsase.neb.optimize.mdmin import mdmin_ssneb
 from tsase.neb.qm_ssneb import qm_ssneb
 from tsase.neb.viz.stem import (
     ProjectedFrameAnalysis,

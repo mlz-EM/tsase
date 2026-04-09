@@ -9,6 +9,7 @@ from ase.calculators.calculator import Calculator, all_changes
 from ase.calculators.emt import EMT
 
 from tsase.neb.core.band import ssneb
+from tsase.neb.optimize.bfgs import bfgs_ssneb
 from tsase.neb.optimize.fire import fire_ssneb
 from tsase.neb.workflows import FieldSSNEBConfig, load_field_ssneb_config, run_field_ssneb
 
@@ -35,6 +36,22 @@ class PositionEnergyCalculator(Calculator):
         self.results = {
             "energy": float(np.sum(positions[:, 0])),
             "forces": np.zeros((len(atoms), 3), dtype=float),
+        }
+
+
+class ConstantStressCalculator(Calculator):
+    implemented_properties = ["energy", "forces", "stress"]
+
+    def __init__(self, stress):
+        super().__init__()
+        self.stress = np.array(stress, dtype=float)
+
+    def calculate(self, atoms=None, properties=None, system_changes=all_changes):
+        super().calculate(atoms, properties, system_changes)
+        self.results = {
+            "energy": 0.0,
+            "forces": np.zeros((len(atoms), 3), dtype=float),
+            "stress": self.stress.copy(),
         }
 
 
@@ -238,6 +255,47 @@ class InterfaceCleanupTests(unittest.TestCase):
                     dtmax=0.01,
                     energy_profile_entries=["polariztion_x"],
                 )
+
+    def test_bfgs_records_actual_applied_step_for_variable_cell_updates(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            start = make_atoms(0.0)
+            end = make_atoms(0.5)
+            calc = ConstantStressCalculator([1.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+            start.calc = calc
+            end.calc = calc
+            band = ssneb(
+                start,
+                end,
+                numImages=4,
+                output_dir=Path(tmpdir) / "bfgs_variable_cell",
+                ss=True,
+                method="normal",
+            )
+            optimizer = bfgs_ssneb(
+                band,
+                maxmove=0.2,
+                alpha=1.0,
+                output_interval=1,
+            )
+
+            previous_positions = band.path[1].get_positions().copy()
+            previous_cell = np.array(band.path[1].get_cell(), dtype=float)
+
+            optimizer.step()
+
+            stored_step = optimizer._previous_steps[0].reshape(band.natom + 3, 3)
+            actual_position_step = band.path[1].get_positions() - previous_positions
+            actual_cell_step = (
+                np.linalg.solve(
+                    previous_cell,
+                    np.array(band.path[1].get_cell(), dtype=float) - previous_cell,
+                )
+                * band.jacobian
+            )
+
+            self.assertGreater(np.linalg.norm(actual_position_step), 0.0)
+            self.assertTrue(np.allclose(stored_step[: band.natom], actual_position_step))
+            self.assertTrue(np.allclose(stored_step[band.natom :], actual_cell_step))
 
 
 if __name__ == "__main__":

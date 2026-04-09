@@ -74,6 +74,53 @@ class FieldWorkflowExampleTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "outputs.energy_profile.entries"):
                 load_field_ssneb_config(config_path)
 
+    def test_optimizer_kind_is_resolved_from_yaml(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            start_path = Path(tmpdir) / "start.xyz"
+            end_path = Path(tmpdir) / "end.xyz"
+            io.write(
+                start_path,
+                Atoms("Cu2", positions=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], cell=[5.0, 5.0, 5.0], pbc=True),
+                format="extxyz",
+            )
+            io.write(
+                end_path,
+                Atoms("Cu2", positions=[[0.2, 0.0, 0.0], [1.2, 0.0, 0.0]], cell=[5.0, 5.0, 5.0], pbc=True),
+                format="extxyz",
+            )
+            config_path = Path(tmpdir) / "bfgs.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "path:",
+                        "  source:",
+                        "    kind: control_points",
+                        "    files:",
+                        "      - start.xyz",
+                        "      - end.xyz",
+                        "    indices: [0, 2]",
+                        "  num_images: 3",
+                        "model:",
+                        "  calculator:",
+                        "    kind: emt",
+                        "  charges:",
+                        "    kind: array",
+                        "    values: [1.0, -1.0]",
+                        "optimizer:",
+                        "  kind: bfgs",
+                        "  maxmove: 0.03",
+                        "  alpha: 50.0",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            resolved = load_field_ssneb_config(config_path)
+            self.assertEqual(resolved.optimizer_kind, "bfgs")
+            self.assertEqual(resolved.optimizer_kwargs["maxmove"], 0.03)
+            self.assertEqual(resolved.optimizer_kwargs["alpha"], 50.0)
+
     def test_band_express_is_resolved_from_yaml(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             start_path = Path(tmpdir) / "start.xyz"

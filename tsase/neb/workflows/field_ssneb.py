@@ -65,6 +65,7 @@ def run_field_ssneb(*, config=None, **unexpected_kwargs):
         output_dir=resolved.run_dir,
         output_settings=resolved.output_settings,
         band_kwargs=resolved.band_kwargs,
+        optimizer_kind=resolved.optimizer_kind,
         optimizer_kwargs=resolved.optimizer_kwargs,
         minimize_kwargs=resolved.minimize_kwargs,
         image_mobility_rates=resolved.image_mobility_rates,

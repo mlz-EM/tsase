@@ -8,7 +8,7 @@ from ase.io import write
 
 from tsase.neb.core.remesh import uniform_remesh
 from tsase.neb.io.manager import OutputManager
-from tsase.neb.optimize.fire import fire_ssneb
+from tsase.neb.optimize import create_optimizer
 
 
 @dataclass(frozen=True)
@@ -325,6 +325,7 @@ def run_staged_ssneb(
     output_dir=None,
     output_settings=None,
     band_kwargs=None,
+    optimizer_kind="fire",
     optimizer_kwargs=None,
     minimize_kwargs=None,
     image_mobility_rates=None,
@@ -406,7 +407,8 @@ def run_staged_ssneb(
             **band_options,
         )
 
-        optimizer = fire_ssneb(
+        optimizer = create_optimizer(
+            optimizer_kind,
             band,
             image_mobility_rates=image_mobility_rates,
             **optimizer_options,
