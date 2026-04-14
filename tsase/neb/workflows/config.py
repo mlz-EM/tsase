@@ -767,6 +767,16 @@ class FieldSSNEBConfig:
             "band": {
                 "spring": float(spring),
                 "method": str(method),
+                **(
+                    {}
+                    if "dneb" not in (band_kwargs or {})
+                    else {"dneb": bool((band_kwargs or {})["dneb"])}
+                ),
+                **(
+                    {}
+                    if "dnebOrg" not in (band_kwargs or {})
+                    else {"dnebOrg": bool((band_kwargs or {})["dnebOrg"])}
+                ),
             },
             "optimizer": {
                 "kind": optimizer_kind,
@@ -865,6 +875,10 @@ class FieldSSNEBConfig:
             "ss": bool(band_config.get("ss", True)),
             "weight": float(band_config.get("weight", 1.0)),
         }
+        if "dneb" in band_config:
+            band_kwargs["dneb"] = bool(band_config.get("dneb"))
+        if "dnebOrg" in band_config:
+            band_kwargs["dnebOrg"] = bool(band_config.get("dnebOrg"))
         if "tangent" in band_config:
             raise ValueError(
                 "band.tangent is no longer supported; the maintained runtime always uses the PE tangent"

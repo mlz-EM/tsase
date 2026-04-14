@@ -185,6 +185,68 @@ class InterfaceCleanupTests(unittest.TestCase):
                 )
             )
 
+    def test_yaml_dneb_flags_reach_runtime_band(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            start_path = Path(tmpdir) / "start.xyz"
+            end_path = Path(tmpdir) / "end.xyz"
+            io.write(
+                start_path,
+                Atoms("Cu2", positions=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], cell=[5.0, 5.0, 5.0], pbc=True),
+                format="extxyz",
+            )
+            io.write(
+                end_path,
+                Atoms("Cu2", positions=[[0.2, 0.0, 0.0], [1.2, 0.0, 0.0]], cell=[5.0, 5.0, 5.0], pbc=True),
+                format="extxyz",
+            )
+
+            config_path = Path(tmpdir) / "dneb.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "run:",
+                        "  root: run",
+                        "path:",
+                        "  source:",
+                        "    kind: control_points",
+                        "    files:",
+                        "      - start.xyz",
+                        "      - end.xyz",
+                        "    indices: [0, 2]",
+                        "  num_images: 3",
+                        "model:",
+                        "  calculator:",
+                        "    kind: emt",
+                        "  charges:",
+                        "    kind: array",
+                        "    values: [1.0, -1.0]",
+                        "band:",
+                        "  ss: false",
+                        "  method: normal",
+                        "  dneb: true",
+                        "  dnebOrg: true",
+                        "optimizer:",
+                        "  output_interval: 1",
+                        "  dt: 0.01",
+                        "  dtmax: 0.01",
+                        "  maxmove: 0.01",
+                        "  convergence:",
+                        "    fmax: 10.0",
+                        "    max_steps: 1",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            config = load_field_ssneb_config(config_path)
+            self.assertTrue(config.band_kwargs["dneb"])
+            self.assertTrue(config.band_kwargs["dnebOrg"])
+
+            result = run_field_ssneb(config=config)
+            self.assertTrue(result["band"].dneb)
+            self.assertTrue(result["band"].dnebOrg)
+
     def test_full_path_xyz_replaces_restart_xyz_in_maintained_config(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             images = [make_atoms(shift) for shift in (0.0, 0.2, 0.4, 0.5)]
@@ -271,8 +333,46 @@ class InterfaceCleanupTests(unittest.TestCase):
 
             self.assertTrue((Path(band.output.path_dir) / "iter_0001.cif").exists())
             self.assertTrue((Path(band.output.energy_dir) / "profile_iter_0001.png").exists())
+            self.assertTrue((Path(band.output.energy_dir) / "profile.png").exists())
             self.assertTrue(Path(band.output.log_file).exists())
             self.assertFalse((Path(band.output.path_dir) / "iter_0000.cif").exists())
+
+    def test_live_energy_profile_plot_updates_outside_snapshot_interval(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            start = make_atoms(0.0)
+            end = make_atoms(0.5)
+            calc = EMT()
+            start.calc = calc
+            end.calc = calc
+            band = ssneb(
+                start,
+                end,
+                numImages=4,
+                output_dir=Path(tmpdir) / "live_profile_outputs",
+                ss=False,
+                method="normal",
+            )
+            optimizer = fire_ssneb(
+                band,
+                output_interval=50,
+                dt=0.01,
+                dtmax=0.01,
+            )
+
+            optimizer._begin_run()
+            try:
+                optimizer.run_iteration(
+                    2,
+                    max_iterations=100,
+                    force_converged=-1.0,
+                    convergence_enabled=False,
+                )
+            finally:
+                optimizer._abort_run()
+
+            self.assertFalse((Path(band.output.path_dir) / "iter_0002.cif").exists())
+            self.assertFalse((Path(band.output.energy_dir) / "profile_iter_0002.png").exists())
+            self.assertTrue((Path(band.output.energy_dir) / "profile.png").exists())
 
     def test_direct_plot_property_still_overrides_default_entries(self):
         with tempfile.TemporaryDirectory() as tmpdir:

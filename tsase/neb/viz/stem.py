@@ -16,9 +16,6 @@ from scipy.optimize import linear_sum_assignment
 
 _GRID_SIZE = 4
 _COLUMN_CUTOFF_ANG = 0.31  # slightly relaxed from 30 pm to avoid obvious over-splitting
-_EXPECTED_PB_COLUMNS = 16
-_EXPECTED_ZR_COLUMNS = 16
-_EXPECTED_O_COLUMNS = 32
 _IMAGE_SHIFTS = np.array(
     [(i, j) for i in (-1.0, 0.0, 1.0) for j in (-1.0, 0.0, 1.0)],
     dtype=float,
@@ -49,6 +46,7 @@ class ProjectedFrameAnalysis:
     """Structured projected result for one ASE ``Atoms`` image."""
 
     frame_index: int
+    grid_size: int
     cell_xy: np.ndarray
     pb_frac: np.ndarray
     zr_frac: np.ndarray
@@ -195,13 +193,25 @@ def _nearest_component_distances(column_components, cell_xy, limit=12):
     return pairs[:limit]
 
 
-def _repair_oversegmented_columns(columns, weights, cell_xy, target_count, label):
+def _expected_pb_columns(grid_size):
+    return int(grid_size * grid_size)
+
+
+def _expected_zr_columns(grid_size):
+    return int(grid_size * grid_size)
+
+
+def _expected_o_columns(grid_size):
+    return int(2 * grid_size * grid_size)
+
+
+def _repair_oversegmented_columns(columns, weights, cell_xy, target_count, label, grid_size):
     if len(columns) <= target_count:
         return np.asarray(columns, dtype=float), []
 
     columns = [np.asarray(column, dtype=float) for column in columns]
     weights = [float(weight) for weight in weights]
-    base_spacing = min(np.linalg.norm(cell_xy[0]), np.linalg.norm(cell_xy[1])) / _GRID_SIZE
+    base_spacing = min(np.linalg.norm(cell_xy[0]), np.linalg.norm(cell_xy[1])) / float(grid_size)
     merge_threshold = 0.35 * base_spacing
     merges = []
 
@@ -247,7 +257,7 @@ def _repair_oversegmented_columns(columns, weights, cell_xy, target_count, label
     return np.asarray(columns, dtype=float), merges
 
 
-def _build_column_sets(atoms, cutoff_angstrom):
+def _build_column_sets(atoms, cutoff_angstrom, *, grid_size):
     symbols = np.asarray(atoms.get_chemical_symbols())
     cell_xy = _cell_xy_from_atoms(atoms)
     projected_fractional = _projected_fractional_positions(atoms)
@@ -319,15 +329,17 @@ def _build_column_sets(atoms, cutoff_angstrom):
         pb_columns,
         pb_weights,
         cell_xy,
-        target_count=_EXPECTED_PB_COLUMNS,
+        target_count=_expected_pb_columns(grid_size),
         label="Pb",
+        grid_size=grid_size,
     )
     zr_columns, zr_merges = _repair_oversegmented_columns(
         zr_columns,
         zr_weights,
         cell_xy,
-        target_count=_EXPECTED_ZR_COLUMNS,
+        target_count=_expected_zr_columns(grid_size),
         label="Zr",
+        grid_size=grid_size,
     )
 
     diagnostics = {
@@ -356,13 +368,13 @@ def _build_column_sets(atoms, cutoff_angstrom):
     }
 
     if (
-        len(pb_columns) != _EXPECTED_PB_COLUMNS
-        or len(zr_columns) != _EXPECTED_ZR_COLUMNS
-        or len(oxygen_columns) < _EXPECTED_O_COLUMNS
+        len(pb_columns) != _expected_pb_columns(grid_size)
+        or len(zr_columns) != _expected_zr_columns(grid_size)
+        or len(oxygen_columns) < _expected_o_columns(grid_size)
     ):
         raise StemAnalysisError(
             (
-                "projected column counts do not match the expected 4x4 pseudocubic lattice "
+                f"projected column counts do not match the expected {grid_size}x{grid_size} pseudocubic lattice "
                 f"(Pb={len(pb_columns)}, Zr={len(zr_columns)}, O-only={len(oxygen_columns)})"
             ),
             diagnostics=diagnostics,
@@ -378,7 +390,7 @@ def _build_column_sets(atoms, cutoff_angstrom):
     )
 
 
-def _circular_group_centers(values, group_count=_GRID_SIZE):
+def _circular_group_centers(values, group_count):
     values = _wrap01(values)
     if len(values) != group_count * group_count:
         raise ValueError(
@@ -423,9 +435,9 @@ def _axis_order_candidates(levels):
     return candidates
 
 
-def _build_pb_grid(pb_columns, cell_xy, previous_pb_plot_grid=None):
-    base_u_levels = _circular_group_centers(pb_columns[:, 0], group_count=_GRID_SIZE)
-    base_v_levels = _circular_group_centers(pb_columns[:, 1], group_count=_GRID_SIZE)
+def _build_pb_grid(pb_columns, cell_xy, *, grid_size, previous_pb_plot_grid=None):
+    base_u_levels = _circular_group_centers(pb_columns[:, 0], group_count=grid_size)
+    base_v_levels = _circular_group_centers(pb_columns[:, 1], group_count=grid_size)
 
     best = None
     u_candidates = _axis_order_candidates(base_u_levels) if previous_pb_plot_grid is not None else [base_u_levels]
@@ -435,16 +447,16 @@ def _build_pb_grid(pb_columns, cell_xy, previous_pb_plot_grid=None):
         for v_levels in v_candidates:
             ideal_nodes = []
             node_indices = []
-            for i in range(_GRID_SIZE):
-                for j in range(_GRID_SIZE):
+            for i in range(grid_size):
+                for j in range(grid_size):
                     ideal_nodes.append([u_levels[i], v_levels[j]])
                     node_indices.append((i, j))
             ideal_nodes = np.asarray(ideal_nodes, dtype=float)
-            ideal_grid = ideal_nodes.reshape(_GRID_SIZE, _GRID_SIZE, 2)
+            ideal_grid = ideal_nodes.reshape(grid_size, grid_size, 2)
             cost = _assignment_cost(pb_columns, ideal_nodes, cell_xy)
             rows, cols = linear_sum_assignment(cost)
 
-            assigned = np.zeros((_GRID_SIZE, _GRID_SIZE, 2), dtype=float)
+            assigned = np.zeros((grid_size, grid_size, 2), dtype=float)
             assignment_cost = 0.0
             for row, col in zip(rows, cols):
                 i, j = node_indices[col]
@@ -453,8 +465,8 @@ def _build_pb_grid(pb_columns, cell_xy, previous_pb_plot_grid=None):
 
             temporal_cost = 0.0
             if previous_pb_plot_grid is not None:
-                for i in range(_GRID_SIZE):
-                    for j in range(_GRID_SIZE):
+                for i in range(grid_size):
+                    for j in range(grid_size):
                         temporal_cost += _torus_distance(
                             ideal_grid[i, j],
                             previous_pb_plot_grid[i, j],
@@ -475,28 +487,28 @@ def _build_pb_grid(pb_columns, cell_xy, previous_pb_plot_grid=None):
                 best = candidate
 
     if best is None:
-        raise StemAnalysisError("failed to build a consistent Pb 4x4 grid")
+        raise StemAnalysisError(f"failed to build a consistent Pb {grid_size}x{grid_size} grid")
 
     u_spacing = [
         _torus_distance(
             [best["u_levels"][i], best["v_levels"][0]],
-            [best["u_levels"][(i + 1) % _GRID_SIZE], best["v_levels"][0]],
+            [best["u_levels"][(i + 1) % grid_size], best["v_levels"][0]],
             cell_xy,
         )
-        for i in range(_GRID_SIZE)
+        for i in range(grid_size)
     ]
     v_spacing = [
         _torus_distance(
             [best["u_levels"][0], best["v_levels"][j]],
-            [best["u_levels"][0], best["v_levels"][(j + 1) % _GRID_SIZE]],
+            [best["u_levels"][0], best["v_levels"][(j + 1) % grid_size]],
             cell_xy,
         )
-        for j in range(_GRID_SIZE)
+        for j in range(grid_size)
     ]
     max_reasonable_distance = 0.49 * min(u_spacing + v_spacing)
-    ideal_nodes = np.zeros((_GRID_SIZE, _GRID_SIZE, 2), dtype=float)
-    for i in range(_GRID_SIZE):
-        for j in range(_GRID_SIZE):
+    ideal_nodes = np.zeros((grid_size, grid_size, 2), dtype=float)
+    for i in range(grid_size):
+        for j in range(grid_size):
             ideal_nodes[i, j] = [best["u_levels"][i], best["v_levels"][j]]
             if _torus_distance(best["assigned"][i, j], ideal_nodes[i, j], cell_xy) > max_reasonable_distance:
                 raise StemAnalysisError(
@@ -528,23 +540,25 @@ def _circular_midpoints(levels):
 
 
 def _ideal_pb_sites(u_levels, v_levels):
-    pb_sites = np.zeros((_GRID_SIZE, _GRID_SIZE, 2), dtype=float)
-    for i in range(_GRID_SIZE):
-        for j in range(_GRID_SIZE):
+    grid_size = len(u_levels)
+    pb_sites = np.zeros((grid_size, grid_size, 2), dtype=float)
+    for i in range(grid_size):
+        for j in range(grid_size):
             pb_sites[i, j] = [u_levels[i], v_levels[j]]
     return pb_sites
 
 
 def _pb_cell_tiles(pb_plot_frac, u_levels, v_levels, cell_xy):
+    grid_size = pb_plot_frac.shape[0]
     u_bounds = _circular_midpoints(u_levels)
     v_bounds = _circular_midpoints(v_levels)
-    tiles = np.zeros((_GRID_SIZE, _GRID_SIZE, 4, 2), dtype=float)
-    for i in range(_GRID_SIZE):
-        for j in range(_GRID_SIZE):
+    tiles = np.zeros((grid_size, grid_size, 4, 2), dtype=float)
+    for i in range(grid_size):
+        for j in range(grid_size):
             left = u_bounds[i]
-            right = u_bounds[(i + 1) % _GRID_SIZE]
+            right = u_bounds[(i + 1) % grid_size]
             bottom = v_bounds[j]
-            top = v_bounds[(j + 1) % _GRID_SIZE]
+            top = v_bounds[(j + 1) % grid_size]
             tile_frac = np.asarray(
                 [
                     [left, bottom],
@@ -560,17 +574,18 @@ def _pb_cell_tiles(pb_plot_frac, u_levels, v_levels, cell_xy):
 
 
 def _site_grid_tiles(site_plot_frac, cell_xy):
+    grid_size = site_plot_frac.shape[0]
     u_levels = site_plot_frac[:, 0, 0]
     v_levels = site_plot_frac[0, :, 1]
     u_bounds = _circular_midpoints(u_levels)
     v_bounds = _circular_midpoints(v_levels)
-    tiles = np.zeros((_GRID_SIZE, _GRID_SIZE, 4, 2), dtype=float)
-    for i in range(_GRID_SIZE):
-        for j in range(_GRID_SIZE):
+    tiles = np.zeros((grid_size, grid_size, 4, 2), dtype=float)
+    for i in range(grid_size):
+        for j in range(grid_size):
             left = u_bounds[i]
-            right = u_bounds[(i + 1) % _GRID_SIZE]
+            right = u_bounds[(i + 1) % grid_size]
             bottom = v_bounds[j]
-            top = v_bounds[(j + 1) % _GRID_SIZE]
+            top = v_bounds[(j + 1) % grid_size]
             tile_frac = np.asarray(
                 [
                     [left, bottom],
@@ -586,15 +601,16 @@ def _site_grid_tiles(site_plot_frac, cell_xy):
 
 
 def _ideal_zr_sites(pb_grid, cell_xy):
-    sites = np.zeros((_GRID_SIZE, _GRID_SIZE, 2), dtype=float)
-    for i in range(_GRID_SIZE):
-        for j in range(_GRID_SIZE):
+    grid_size = pb_grid.shape[0]
+    sites = np.zeros((grid_size, grid_size, 2), dtype=float)
+    for i in range(grid_size):
+        for j in range(grid_size):
             corners = np.asarray(
                 [
                     pb_grid[i, j],
-                    pb_grid[(i + 1) % _GRID_SIZE, j],
-                    pb_grid[i, (j + 1) % _GRID_SIZE],
-                    pb_grid[(i + 1) % _GRID_SIZE, (j + 1) % _GRID_SIZE],
+                    pb_grid[(i + 1) % grid_size, j],
+                    pb_grid[i, (j + 1) % grid_size],
+                    pb_grid[(i + 1) % grid_size, (j + 1) % grid_size],
                 ],
                 dtype=float,
             )
@@ -603,18 +619,19 @@ def _ideal_zr_sites(pb_grid, cell_xy):
 
 
 def _ideal_o_sites(pb_grid, cell_xy):
-    oh = np.zeros((_GRID_SIZE, _GRID_SIZE, 2), dtype=float)
-    ov = np.zeros((_GRID_SIZE, _GRID_SIZE, 2), dtype=float)
-    for i in range(_GRID_SIZE):
-        for j in range(_GRID_SIZE):
+    grid_size = pb_grid.shape[0]
+    oh = np.zeros((grid_size, grid_size, 2), dtype=float)
+    ov = np.zeros((grid_size, grid_size, 2), dtype=float)
+    for i in range(grid_size):
+        for j in range(grid_size):
             oh[i, j] = _torus_midpoint(
                 pb_grid[i, j],
-                pb_grid[(i + 1) % _GRID_SIZE, j],
+                pb_grid[(i + 1) % grid_size, j],
                 cell_xy,
             )
             ov[i, j] = _torus_midpoint(
                 pb_grid[i, j],
-                pb_grid[i, (j + 1) % _GRID_SIZE],
+                pb_grid[i, (j + 1) % grid_size],
                 cell_xy,
             )
     return oh, ov
@@ -715,8 +732,9 @@ def _build_zr_polygons_and_tilts(
     zr_plot_grid=None,
     horizontal_pair_family=None,
 ):
-    polygons = np.zeros((_GRID_SIZE, _GRID_SIZE, 4, 2), dtype=float)
-    tilts = np.zeros((_GRID_SIZE, _GRID_SIZE), dtype=float)
+    grid_size = zr_grid.shape[0]
+    polygons = np.zeros((grid_size, grid_size, 4, 2), dtype=float)
+    tilts = np.zeros((grid_size, grid_size), dtype=float)
     a_axis = np.asarray(cell_xy[0], dtype=float)
     pair_alignment = {"oh": 0.0, "ov": 0.0}
     pair_vectors = {}
@@ -724,14 +742,14 @@ def _build_zr_polygons_and_tilts(
         zr_plot_grid = zr_grid
 
     if horizontal_pair_family is None:
-        for i in range(_GRID_SIZE):
-            for j in range(_GRID_SIZE):
+        for i in range(grid_size):
+            for j in range(grid_size):
                 oh_neighbors = np.asarray(
-                    [oh_grid[i, j], oh_grid[i, (j + 1) % _GRID_SIZE]],
+                    [oh_grid[i, j], oh_grid[i, (j + 1) % grid_size]],
                     dtype=float,
                 )
                 ov_neighbors = np.asarray(
-                    [ov_grid[i, j], ov_grid[(i + 1) % _GRID_SIZE, j]],
+                    [ov_grid[i, j], ov_grid[(i + 1) % grid_size, j]],
                     dtype=float,
                 )
                 oh_local, _, _ = _localize_positions(zr_grid[i, j], oh_neighbors, cell_xy)
@@ -740,14 +758,14 @@ def _build_zr_polygons_and_tilts(
                 pair_alignment["ov"] += abs(np.dot(ov_local[1] - ov_local[0], a_axis))
         horizontal_pair_family = "oh" if pair_alignment["oh"] >= pair_alignment["ov"] else "ov"
 
-    for i in range(_GRID_SIZE):
-        for j in range(_GRID_SIZE):
+    for i in range(grid_size):
+        for j in range(grid_size):
             neighbors = np.asarray(
                 [
                     oh_grid[i, j],
-                    oh_grid[i, (j + 1) % _GRID_SIZE],
+                    oh_grid[i, (j + 1) % grid_size],
                     ov_grid[i, j],
-                    ov_grid[(i + 1) % _GRID_SIZE, j],
+                    ov_grid[(i + 1) % grid_size, j],
                 ],
                 dtype=float,
             )
@@ -772,14 +790,15 @@ def _build_zr_polygons_and_tilts(
 
 
 def _build_pb_displacements(pb_grid, oh_grid, ov_grid, cell_xy):
-    displacements = np.zeros((_GRID_SIZE, _GRID_SIZE, 2), dtype=float)
-    for i in range(_GRID_SIZE):
-        for j in range(_GRID_SIZE):
+    grid_size = pb_grid.shape[0]
+    displacements = np.zeros((grid_size, grid_size, 2), dtype=float)
+    for i in range(grid_size):
+        for j in range(grid_size):
             neighbors = np.asarray(
                 [
-                    oh_grid[(i - 1) % _GRID_SIZE, j],
+                    oh_grid[(i - 1) % grid_size, j],
                     oh_grid[i, j],
-                    ov_grid[i, (j - 1) % _GRID_SIZE],
+                    ov_grid[i, (j - 1) % grid_size],
                     ov_grid[i, j],
                 ],
                 dtype=float,
@@ -798,6 +817,7 @@ def analyze_projected_neb_image(
     previous_pb_plot_grid=None,
     horizontal_pair_family=None,
     cutoff_angstrom=_COLUMN_CUTOFF_ANG,
+    grid_size=_GRID_SIZE,
 ):
     """Analyze one ASE ``Atoms`` image in the projected ``ab`` plane."""
 
@@ -808,11 +828,12 @@ def analyze_projected_neb_image(
         column_components,
         diagnostics,
         cell_xy,
-    ) = _build_column_sets(atoms, cutoff_angstrom=cutoff_angstrom)
+    ) = _build_column_sets(atoms, cutoff_angstrom=cutoff_angstrom, grid_size=grid_size)
 
     pb_grid, u_levels, v_levels, max_reasonable_distance = _build_pb_grid(
         pb_columns,
         cell_xy,
+        grid_size=grid_size,
         previous_pb_plot_grid=previous_pb_plot_grid,
     )
     current_pb_plot_grid = _ideal_pb_sites(u_levels, v_levels)
@@ -834,13 +855,13 @@ def analyze_projected_neb_image(
     oxygen_ideal = np.concatenate([oh_ideal.reshape(-1, 2), ov_ideal.reshape(-1, 2)], axis=0)
     oxygen_assigned, oxygen_selection = _assign_edge_oxygen_columns(
         oxygen_columns,
-        oxygen_ideal.reshape(2 * _GRID_SIZE, _GRID_SIZE, 2),
+        oxygen_ideal.reshape(2 * grid_size, grid_size, 2),
         cell_xy,
         max_reasonable_distance=max_reasonable_distance,
     )
-    oxygen_assigned = oxygen_assigned.reshape(2 * _GRID_SIZE * _GRID_SIZE, 2)
-    oh_grid = oxygen_assigned[: _GRID_SIZE * _GRID_SIZE].reshape(_GRID_SIZE, _GRID_SIZE, 2)
-    ov_grid = oxygen_assigned[_GRID_SIZE * _GRID_SIZE :].reshape(_GRID_SIZE, _GRID_SIZE, 2)
+    oxygen_assigned = oxygen_assigned.reshape(2 * grid_size * grid_size, 2)
+    oh_grid = oxygen_assigned[: grid_size * grid_size].reshape(grid_size, grid_size, 2)
+    ov_grid = oxygen_assigned[grid_size * grid_size :].reshape(grid_size, grid_size, 2)
 
     zr_polygons_xy, zr_tilt_deg, horizontal_pair_family = _build_zr_polygons_and_tilts(
         zr_grid,
@@ -864,6 +885,7 @@ def analyze_projected_neb_image(
     diagnostics = dict(diagnostics)
     diagnostics["pb_u_levels"] = u_levels.tolist()
     diagnostics["pb_v_levels"] = v_levels.tolist()
+    diagnostics["grid_size"] = int(grid_size)
     diagnostics["horizontal_pair_family"] = horizontal_pair_family
     diagnostics["max_assignment_distance_angstrom"] = max_reasonable_distance
     diagnostics["edge_oxygen_selection"] = {
@@ -891,6 +913,7 @@ def analyze_projected_neb_image(
 
     return ProjectedFrameAnalysis(
         frame_index=int(frame_index),
+        grid_size=int(grid_size),
         cell_xy=np.asarray(cell_xy, dtype=float),
         pb_frac=np.asarray(pb_grid, dtype=float),
         zr_frac=np.asarray(zr_grid, dtype=float),
@@ -898,12 +921,12 @@ def analyze_projected_neb_image(
         ov_frac=np.asarray(ov_grid, dtype=float),
         pb_plot_frac=np.asarray(pb_plot_grid, dtype=float),
         zr_plot_frac=np.asarray(zr_plot_grid, dtype=float),
-        pb_xy=_frac_to_xy(pb_grid.reshape(-1, 2), cell_xy).reshape(_GRID_SIZE, _GRID_SIZE, 2),
-        zr_xy=_frac_to_xy(zr_grid.reshape(-1, 2), cell_xy).reshape(_GRID_SIZE, _GRID_SIZE, 2),
-        oh_xy=_frac_to_xy(oh_grid.reshape(-1, 2), cell_xy).reshape(_GRID_SIZE, _GRID_SIZE, 2),
-        ov_xy=_frac_to_xy(ov_grid.reshape(-1, 2), cell_xy).reshape(_GRID_SIZE, _GRID_SIZE, 2),
-        pb_plot_xy=_frac_to_xy(pb_plot_grid.reshape(-1, 2), cell_xy).reshape(_GRID_SIZE, _GRID_SIZE, 2),
-        zr_plot_xy=_frac_to_xy(zr_plot_grid.reshape(-1, 2), cell_xy).reshape(_GRID_SIZE, _GRID_SIZE, 2),
+        pb_xy=_frac_to_xy(pb_grid.reshape(-1, 2), cell_xy).reshape(grid_size, grid_size, 2),
+        zr_xy=_frac_to_xy(zr_grid.reshape(-1, 2), cell_xy).reshape(grid_size, grid_size, 2),
+        oh_xy=_frac_to_xy(oh_grid.reshape(-1, 2), cell_xy).reshape(grid_size, grid_size, 2),
+        ov_xy=_frac_to_xy(ov_grid.reshape(-1, 2), cell_xy).reshape(grid_size, grid_size, 2),
+        pb_plot_xy=_frac_to_xy(pb_plot_grid.reshape(-1, 2), cell_xy).reshape(grid_size, grid_size, 2),
+        zr_plot_xy=_frac_to_xy(zr_plot_grid.reshape(-1, 2), cell_xy).reshape(grid_size, grid_size, 2),
         pb_tiles_xy=pb_tiles_xy,
         zr_tiles_xy=zr_tiles_xy,
         zr_polygons_xy=zr_polygons_xy,
@@ -984,6 +1007,7 @@ def render_projected_frame(analysis, output_path):
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 5), constrained_layout=True)
+    grid_size = int(getattr(analysis, "grid_size", analysis.pb_plot_xy.shape[0]))
     outline = _cell_outline(analysis.cell_xy)
     a_axis = np.asarray(analysis.cell_xy[0], dtype=float)
     x_values = outline[:, 0].tolist()
@@ -1042,7 +1066,7 @@ def render_projected_frame(analysis, output_path):
         zorder=1,
     )
     axes[1].add_collection(raw_tile_collection)
-    tile_scale = min(np.linalg.norm(analysis.cell_xy[0]), np.linalg.norm(analysis.cell_xy[1])) / _GRID_SIZE
+    tile_scale = min(np.linalg.norm(analysis.cell_xy[0]), np.linalg.norm(analysis.cell_xy[1])) / float(grid_size)
     arrow_length = 0.22 * tile_scale
     arrow_width = 0.12 * tile_scale
     for (x_coord, y_coord), angle_deg in zip(pb_plot_xy, raw_angles):
@@ -1153,7 +1177,7 @@ def _failed_direct_stem_sequence_result(
     }
 
 
-def _analyze_projected_sequence(images, *, cutoff_angstrom):
+def _analyze_projected_sequence(images, *, cutoff_angstrom, grid_size):
     analyses = []
     anchor_pb_plot_grid = None
     horizontal_pair_family = None
@@ -1164,6 +1188,7 @@ def _analyze_projected_sequence(images, *, cutoff_angstrom):
             previous_pb_plot_grid=anchor_pb_plot_grid,
             horizontal_pair_family=horizontal_pair_family,
             cutoff_angstrom=cutoff_angstrom,
+            grid_size=grid_size,
         )
         if anchor_pb_plot_grid is None:
             anchor_pb_plot_grid = analysis.pb_plot_frac.copy()
@@ -1204,6 +1229,7 @@ def _write_npz_analysis(analyses, output_dir):
                     "zr_tilt_deg": "degrees",
                     "polar_displacements": "angstrom",
                 },
+                "grid_size": [analysis.grid_size for analysis in analyses],
                 "frame_diagnostics": [analysis.diagnostics for analysis in analyses],
                 "horizontal_pair_family": [analysis.horizontal_pair_family for analysis in analyses],
             },
@@ -1227,6 +1253,7 @@ def analyze_stem_sequence_from_xyz(
     emit_diagnostics=True,
     gif_duration_seconds=0.4,
     cutoff_angstrom=_COLUMN_CUTOFF_ANG,
+    grid_size=_GRID_SIZE,
 ):
     """Analyze a saved XYZ path and emit requested STEM artifacts."""
 
@@ -1245,7 +1272,7 @@ def analyze_stem_sequence_from_xyz(
 
     try:
         images = read(str(xyz_path), ":")
-        analyses = _analyze_projected_sequence(images, cutoff_angstrom=cutoff_angstrom)
+        analyses = _analyze_projected_sequence(images, cutoff_angstrom=cutoff_angstrom, grid_size=grid_size)
     except StemAnalysisError as error:
         return _failed_stem_sequence_result(
             xyz_path=xyz_path,
@@ -1276,6 +1303,7 @@ def analyze_stem_sequence_from_xyz(
         "output_dir": str(destination),
         "frame_dir": str(frame_dir),
         "frames_rendered": len(analyses),
+        "grid_size": int(grid_size),
     }
     if emit_png:
         frame_dir.mkdir(parents=True, exist_ok=True)
@@ -1383,6 +1411,7 @@ def save_projected_neb_sequence(
     emit_diagnostics=True,
     gif_duration_seconds=0.4,
     cutoff_angstrom=_COLUMN_CUTOFF_ANG,
+    grid_size=_GRID_SIZE,
 ):
     """Analyze and render one saved NEB sequence.
 
@@ -1402,7 +1431,7 @@ def save_projected_neb_sequence(
     diagnostics_path = xyz_dir / f"stem_iter_{int(iteration):04d}_diagnostics.txt"
 
     try:
-        analyses = _analyze_projected_sequence(images, cutoff_angstrom=cutoff_angstrom)
+        analyses = _analyze_projected_sequence(images, cutoff_angstrom=cutoff_angstrom, grid_size=grid_size)
     except StemAnalysisError as error:
         if emit_diagnostics:
             diagnostics_path.write_text(
@@ -1438,6 +1467,7 @@ def save_projected_neb_sequence(
         "status": "ok",
         "frames_rendered": len(analyses),
         "frame_dir": str(frame_dir),
+        "grid_size": int(grid_size),
     }
     if emit_png:
         frame_dir.mkdir(parents=True, exist_ok=True)

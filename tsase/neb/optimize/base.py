@@ -126,7 +126,7 @@ class minimizer_ssneb:
             analyze_stem_sequence_from_xyz,
         )
 
-    def _save_energy_plot(self, iteration):
+    def _write_energy_profile_csv(self, iteration):
         if self.output is None:
             return
         entries, rows, skipped_entries = build_energy_profile_rows(self.band.path, self.energy_profile_entries)
@@ -136,7 +136,10 @@ class minimizer_ssneb:
                 + ", ".join(skipped_entries)
             )
         self.output.write_energy_profile_csv(iteration, entries, rows)
-        if not entries or not self.output.settings.get("energy_profile_plot", True):
+        return entries, rows
+
+    def _render_energy_plot(self, iteration, entries, rows, *, live=False):
+        if self.output is None or not entries or not self.output.settings.get("energy_profile_plot", True):
             return
         try:
             import matplotlib
@@ -194,12 +197,27 @@ class minimizer_ssneb:
                 labels.append(ENTRY_METADATA[entry]["label"])
 
         primary_axis.legend(lines, labels, loc="best")
-        self.output.save_energy_plot(fig, iteration)
+        if live:
+            self.output.save_live_energy_plot(fig)
+        else:
+            self.output.save_energy_plot(fig, iteration)
         plt.close(fig)
+
+    def update_live_energy_plot(self, iteration):
+        if self.output is None or not self.output.settings.get("energy_profile_plot", True):
+            return
+        entries, rows, skipped_entries = build_energy_profile_rows(self.band.path, self.energy_profile_entries)
+        if skipped_entries and self.output.is_active:
+            print(
+                "Skipping unavailable energy-profile entries: "
+                + ", ".join(skipped_entries)
+            )
+        self._render_energy_plot(iteration, entries, rows, live=True)
 
     def ensure_iteration_outputs(self, iteration):
         self._write_iteration_xyz(iteration)
-        self._save_energy_plot(iteration)
+        entries, rows = self._write_energy_profile_csv(iteration)
+        self._render_energy_plot(iteration, entries, rows)
 
     def _begin_run(self):
         if self.output is not None and self.output.is_active:
@@ -259,6 +277,7 @@ class minimizer_ssneb:
                 output,
                 self._status_separator,
             )
+            self.update_live_energy_plot(iteration)
         if should_output:
             self.ensure_iteration_outputs(iteration)
         return {

@@ -377,6 +377,19 @@ class OutputManager:
         fig.savefig(str(outfile), dpi=150)
         return str(outfile)
 
+    def save_live_energy_plot(self, fig):
+        if (
+            not self.is_active
+            or not self.settings["energy_profile"]
+            or not self.settings["energy_profile_plot"]
+        ):
+            return None
+        self.paths.energy_dir.mkdir(parents=True, exist_ok=True)
+        outfile = self.paths.energy_dir / "profile.png"
+        fig.tight_layout()
+        fig.savefig(str(outfile), dpi=150)
+        return str(outfile)
+
     def open_log(self, header, separator):
         if not self.is_active:
             return

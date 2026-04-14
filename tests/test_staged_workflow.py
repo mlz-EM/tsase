@@ -191,6 +191,7 @@ class StagedWorkflowTests(unittest.TestCase):
             first_stage_artifacts = result["stages"][0]["artifacts"]
             self.assertTrue((Path(first_stage_artifacts.path_dir) / "iter_0001.cif").exists())
             self.assertTrue((Path(first_stage_artifacts.energy_dir) / "profile_iter_0001.png").exists())
+            self.assertTrue((Path(first_stage_artifacts.energy_dir) / "profile.png").exists())
 
     def test_staged_run_supports_multiple_optimizer_kinds(self):
         expected_classes = {
