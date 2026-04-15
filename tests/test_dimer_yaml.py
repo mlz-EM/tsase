@@ -151,6 +151,59 @@ class DimerYamlWorkflowTests(unittest.TestCase):
             self.assertTrue(Path(result["artifacts"]["summary_file"]).exists())
             self.assertTrue(Path(result["artifacts"]["saddle_structure"]).exists())
 
+    def test_resolved_yaml_preserves_calculator_arguments_for_reload(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            im_path, fe_path = self._write_structure_files(root)
+            model_path = root / "dummy.model"
+            model_path.write_text("placeholder", encoding="utf-8")
+            config_path = root / "run_lanczos_dimer.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "run:",
+                        "  root: run",
+                        "  name: yaml_lanczos",
+                        "structure:",
+                        f"  file: {im_path.name}",
+                        "model:",
+                        "  calculator:",
+                        "    kind: mace_field",
+                        f"    model_path: {model_path.name}",
+                        "  charges:",
+                        "    kind: array",
+                        "    values: [1.0]",
+                        "  field:",
+                        "    kind: cartesian",
+                        "    value: [0.0, 0.0, 0.02]",
+                        "search:",
+                        "  method: lanczos",
+                        "  quiet: true",
+                        "  mode:",
+                        "    kind: difference",
+                        f"    file: {fe_path.name}",
+                        "  dimer:",
+                        "    ss: false",
+                        "    noZeroModes: false",
+                        "convergence:",
+                        "  minForce: 10.0",
+                        "  maxForceCalls: 2",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch("tsase.dimer.workflows.load_mace_calculator", return_value=DummyMaceFieldCalculator):
+                result = run_dimer_from_yaml(config_path)
+                resolved = load_dimer_config(result["artifacts"]["resolved_config"])
+
+            self.assertEqual(resolved.calculator_mode, "mace_field")
+            self.assertEqual(
+                DummyMaceFieldCalculator.last_init_kwargs["model_paths"],
+                str(model_path.resolve()),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -91,6 +91,30 @@ def _build_calculator(calculator_config, base_dir, *, field_vector):
     raise ValueError("model.calculator.kind must be one of: emt, mace, mace_field")
 
 
+def _serialize_calculator_config(calculator_config, base_dir):
+    calculator_config = dict(calculator_config or {})
+    kind = str(calculator_config.get("kind", "emt")).lower()
+    serialized = {"kind": kind}
+    for key, value in calculator_config.items():
+        if key == "kind":
+            continue
+        if key == "model_path":
+            serialized[key] = str(_resolve_path(base_dir, value))
+        else:
+            serialized[key] = value
+    return serialized
+
+
+def _serialize_mode_config(mode_config, base_dir):
+    mode_config = dict(mode_config or {})
+    if not mode_config:
+        return None
+    serialized = dict(mode_config)
+    if "file" in serialized:
+        serialized["file"] = str(_resolve_path(base_dir, serialized["file"]))
+    return serialized
+
+
 def _resolve_reference_atoms(reference_config, base_dir, structure):
     reference_config = dict(reference_config or {})
     kind = str(reference_config.get("kind", "first_structure")).lower()
@@ -417,7 +441,7 @@ class DimerConfig:
             "run": {"root": str(run_dir), "name": run_dir.name},
             "structure": {"file": str(_resolve_path(base_dir, structure_config["file"]))},
             "model": {
-                "calculator": {"kind": calculator_mode},
+                "calculator": _serialize_calculator_config(model_config.get("calculator"), base_dir),
                 "charges": None if charge_map is None else model_config.get("charges"),
                 "field": {"kind": "cartesian", "value": [float(value) for value in field_vector]},
             },
@@ -425,7 +449,7 @@ class DimerConfig:
                 "method": method,
                 "copy_atoms": copy_atoms,
                 "quiet": search_kwargs["quiet"],
-                "mode": search_config.get("mode"),
+                "mode": _serialize_mode_config(search_config.get("mode"), base_dir),
                 "dimer": dict(dimer_kwargs),
             },
             "convergence": {
