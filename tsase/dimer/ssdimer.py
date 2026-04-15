@@ -508,10 +508,11 @@ class SSDimer:
         output_callback=None,
     ):
         self.converged = False
-        self.initial_energy = None
         self.target_min_force = float(minForce)
-        self.step_diagnostics = {}
-        if movie:
+        if self.steps == 0:
+            self.initial_energy = None
+            self.step_diagnostics = {}
+        if movie and self.steps == 0:
             io.write(movie, self.R0, format="vasp")
 
         cc = getattr(self, "curvature", 1.0)

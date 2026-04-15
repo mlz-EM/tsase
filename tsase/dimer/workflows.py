@@ -179,6 +179,12 @@ def _normalize_output_settings(settings):
         "write_mode": bool(settings.get("write_mode", True)),
         "stem": bool(settings.get("stem", False)),
         "stem_interval": int(settings.get("stem_interval", 10)),
+        "output_interval": int(
+            settings.get(
+                "output_interval",
+                settings.get("stem_interval", settings.get("movie_interval", 10)),
+            )
+        ),
         "progress_log": bool(settings.get("progress_log", True)),
         "live_plot": bool(settings.get("live_plot", True)),
     }
@@ -198,6 +204,59 @@ def _write_yaml(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(dump_yaml(payload) + "\n", encoding="utf-8")
     return path
+
+
+def _read_json(path):
+    path = Path(path)
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _state_artifacts(run_dir):
+    run_dir = Path(run_dir)
+    state_dir = run_dir / "state"
+    return {
+        "state_dir": state_dir,
+        "current_structure": state_dir / "current.cif",
+        "current_mode": state_dir / "current_mode.npy",
+        "current_velocity": state_dir / "current_velocity.npy",
+        "runtime_state": state_dir / "runtime_state.json",
+    }
+
+
+def _load_progress_history(path):
+    path = Path(path)
+    if not path.exists():
+        return []
+
+    lines = path.read_text(encoding="utf-8").strip().splitlines()
+    if len(lines) <= 1:
+        return []
+    columns = lines[0].split("\t")
+    history = []
+    for line in lines[1:]:
+        values = line.split("\t")
+        row = dict(zip(columns, values))
+        history.append(
+            {
+                "step": int(row["step"]),
+                "region": row["region"],
+                "fmax": float(row["fmax_ev_per_a"]),
+                "curvature": float(row["curvature"]),
+                "delta_e_mev_per_atom": float(row["delta_e_mev_per_atom"]),
+                "step_norm": float(row["step_norm"]),
+                "force_calls_step": int(row["force_calls_step"]),
+                "force_calls_total": int(row["force_calls_total"]),
+                "alpha": float(row["alpha"]),
+                "rotation_angle_deg": float(row["rotation_angle_deg"]),
+                "rotation_substeps": int(row["rotation_substeps"]),
+                "ftrans_norm": float(row["ftrans_norm"]),
+                "mode_status": row["mode_status"],
+                "translation_mode": row["translation_mode"],
+                "converged": row["converged"].lower() == "true",
+            }
+        )
+    return history
 
 
 @dataclass(frozen=True)
@@ -355,7 +414,7 @@ class DimerConfig:
         output_settings = _normalize_output_settings(outputs)
 
         resolved_config = {
-            "run": {"root": str(run_dir.parent), "name": run_dir.name},
+            "run": {"root": str(run_dir), "name": run_dir.name},
             "structure": {"file": str(_resolve_path(base_dir, structure_config["file"]))},
             "model": {
                 "calculator": {"kind": calculator_mode},
@@ -380,6 +439,7 @@ class DimerConfig:
                 "write_mode": output_settings["write_mode"],
                 "stem": output_settings["stem"],
                 "stem_interval": output_settings["stem_interval"],
+                "output_interval": output_settings["output_interval"],
                 "progress_log": output_settings["progress_log"],
                 "live_plot": output_settings["live_plot"],
             },
@@ -606,6 +666,11 @@ def _write_workflow_outputs(config, search, search_result, downhill_result):
         "iteration_dir": run_dir / "iterations",
         "stem_dir": run_dir / "stem",
         "log_dir": run_dir / "logs",
+        "state_dir": run_dir / "state",
+        "current_structure": run_dir / "state" / "current.cif",
+        "current_mode": run_dir / "state" / "current_mode.npy",
+        "current_velocity": run_dir / "state" / "current_velocity.npy",
+        "runtime_state": run_dir / "state" / "runtime_state.json",
         "progress_log": run_dir / "logs" / "dimer_progress.tsv",
         "live_plot": run_dir / "logs" / "live_progress.png",
         "positive_structure": None,
@@ -709,7 +774,7 @@ def _update_live_progress_plot(path, history, *, min_force):
     }
     metrics = [
         ("fmax", "Fmax (eV/A)", [entry["fmax"] for entry in history]),
-        ("curvature", "Curvature", [entry["curvature"] for entry in history]),
+        ("curvature", "|Curvature|", [abs(entry["curvature"]) for entry in history]),
         ("delta_e", "dE (meV/atom)", [entry["delta_e_mev_per_atom"] for entry in history]),
         ("force_calls_step", "FC/step", [entry["force_calls_step"] for entry in history]),
     ]
@@ -740,7 +805,9 @@ def _update_live_progress_plot(path, history, *, min_force):
             axis.set_yscale("log")
             axis.axhline(max(min_force, 1.0e-12), color=colors[key], linestyle="--", linewidth=1.0, alpha=0.7)
         if key == "curvature":
-            axis.axhline(0.0, color=colors[key], linestyle="--", linewidth=1.0, alpha=0.7)
+            positive_values = [max(value, 1.0e-12) for value in values]
+            line.set_ydata(positive_values)
+            axis.set_yscale("log")
         axes.append(axis)
         lines.append(line)
 
@@ -757,31 +824,98 @@ def _update_live_progress_plot(path, history, *, min_force):
     return Path(path)
 
 
-def _make_snapshot_callback(config):
+def _write_runtime_checkpoint(search, run_dir):
+    state = _state_artifacts(run_dir)
+    state["state_dir"].mkdir(parents=True, exist_ok=True)
+    write(str(state["current_structure"]), search.R0)
+    np.save(state["current_mode"], np.array(search.get_mode(), dtype=float))
+    velocity = getattr(search, "V", None)
+    if velocity is None:
+        shape = (search.natom + 3, 3) if search.ss else (search.natom, 3)
+        velocity = np.zeros(shape, dtype=float)
+    np.save(state["current_velocity"], np.array(velocity, dtype=float))
+    payload = {
+        "method": type(search).__name__,
+        "steps": int(search.steps),
+        "force_calls": int(search.forceCalls),
+        "curvature": float(search.curvature),
+        "initial_energy": None if search.initial_energy is None else float(search.initial_energy),
+        "energy": None if search.E is None else float(search.E),
+        "alpha": float(getattr(search, "last_alpha", 0.0)),
+        "rotation_angle_deg": float(getattr(search, "last_rotation_angle_deg", 0.0)),
+        "rotation_substeps": int(getattr(search, "last_rotation_substeps", 0)),
+        "mode_status": str(getattr(search, "last_mode_status", "rotating")),
+        "translation_mode": str(getattr(search, "last_translation_mode", "drag_up")),
+        "ftrans_norm": float(getattr(search, "last_ftrans_norm", 0.0)),
+        "step_diagnostics": dict(getattr(search, "step_diagnostics", {})),
+    }
+    _write_json(state["runtime_state"], payload)
+    return state
+
+
+def _restore_runtime_checkpoint(search, run_dir):
+    state = _state_artifacts(run_dir)
+    required = (
+        state["current_structure"],
+        state["current_mode"],
+        state["current_velocity"],
+        state["runtime_state"],
+    )
+    missing = [str(path) for path in required if not path.exists()]
+    if missing:
+        raise FileNotFoundError(
+            "Cannot resume dimer run; missing checkpoint files: " + ", ".join(missing)
+        )
+
+    checkpoint_atoms = read(str(state["current_structure"]))
+    search.R0.set_cell(checkpoint_atoms.get_cell(), scale_atoms=False)
+    search.R0.set_positions(checkpoint_atoms.get_positions())
+    search.N = search._normalize_mode(np.load(state["current_mode"]))
+    search.V = np.array(np.load(state["current_velocity"]), dtype=float)
+
+    payload = _read_json(state["runtime_state"])
+    search.steps = int(payload.get("steps", 0))
+    search.forceCalls = int(payload.get("force_calls", 0))
+    search.curvature = float(payload.get("curvature", 1.0))
+    search.initial_energy = payload.get("initial_energy")
+    if search.initial_energy is not None:
+        search.initial_energy = float(search.initial_energy)
+    search.E = payload.get("energy")
+    if search.E is not None:
+        search.E = float(search.E)
+    search.last_alpha = float(payload.get("alpha", 0.0))
+    search.last_rotation_angle_deg = float(payload.get("rotation_angle_deg", 0.0))
+    search.last_rotation_substeps = int(payload.get("rotation_substeps", 0))
+    search.last_mode_status = str(payload.get("mode_status", "rotating"))
+    search.last_translation_mode = str(payload.get("translation_mode", "drag_up"))
+    search.last_ftrans_norm = float(payload.get("ftrans_norm", 0.0))
+    search.step_diagnostics = dict(payload.get("step_diagnostics", {}))
+    search.R1 = search._copy_runtime_atoms(search.R0)
+    search.R1_prime = search._copy_runtime_atoms(search.R0)
+    return payload
+
+
+def _make_snapshot_callback(config, *, resume=False):
     if not (
-        config.output_settings.get("write_structures", True)
-        or config.output_settings.get("stem", False)
+        True
         or config.output_settings.get("progress_log", True)
         or config.output_settings.get("live_plot", True)
-        or config.output_settings.get("write_mode", True)
     ):
         return None
 
     iteration_dir = config.run_dir / "iterations"
     stem_dir = config.run_dir / "stem"
     log_dir = config.run_dir / "logs"
-    saddle_dir = config.run_dir / "saddle"
     progress_log = log_dir / "dimer_progress.tsv"
     live_plot = log_dir / "live_progress.png"
-    mode_path = saddle_dir / "mode.npy"
-    interval = max(1, int(config.output_settings.get("stem_interval", 10)))
-    history = []
+    interval = max(1, int(config.output_settings.get("output_interval", 10)))
+    history = _load_progress_history(progress_log) if resume else []
+    if not resume and config.output_settings.get("progress_log", True):
+        _write_progress_header(progress_log)
 
     def callback(search):
         diagnostics = dict(search.step_diagnostics)
-        if config.output_settings.get("write_mode", True):
-            saddle_dir.mkdir(parents=True, exist_ok=True)
-            np.save(mode_path, np.array(search.get_mode(), dtype=float))
+        _write_runtime_checkpoint(search, config.run_dir)
         if config.output_settings.get("progress_log", True):
             _append_progress_row(progress_log, diagnostics)
         if config.output_settings.get("live_plot", True):
@@ -794,9 +928,17 @@ def _make_snapshot_callback(config):
             )
         if search.steps == 1 or search.steps % interval == 0:
             snapshot_path = iteration_dir / f"iter_{int(search.steps):04d}.cif"
-            if config.output_settings.get("write_structures", True) or config.output_settings.get("stem", False):
+            mode_snapshot_path = iteration_dir / f"mode_{int(search.steps):04d}.npy"
+            if (
+                config.output_settings.get("write_structures", True)
+                or config.output_settings.get("stem", False)
+                or config.output_settings.get("write_mode", True)
+            ):
                 iteration_dir.mkdir(parents=True, exist_ok=True)
+            if config.output_settings.get("write_structures", True) or config.output_settings.get("stem", False):
                 write(str(snapshot_path), search.R0)
+            if config.output_settings.get("write_mode", True):
+                np.save(mode_snapshot_path, np.array(search.get_mode(), dtype=float))
             if config.output_settings.get("stem", False):
                 result = analyze_stem_sequence_from_xyz(
                     snapshot_path,
@@ -820,7 +962,30 @@ def load_dimer_config(path, *, overrides=None):
     return DimerConfig.from_yaml(path, overrides=overrides)
 
 
-def run_dimer(*, config=None, **unexpected_kwargs):
+def load_dimer_resume_config(run_dir, *, overrides=None):
+    """Load a resolved run directory and point the workflow at its checkpoint state."""
+
+    run_dir = Path(run_dir).expanduser().resolve()
+    resolved_path = run_dir / "config" / "resolved.yaml"
+    if not resolved_path.exists():
+        raise FileNotFoundError(f"Cannot resume dimer run; missing {resolved_path}")
+
+    state = _state_artifacts(run_dir)
+    raw = load_yaml_file(resolved_path)
+    raw = _deep_update(
+        raw,
+        {
+            "run": {"root": str(run_dir), "name": run_dir.name},
+            "structure": {"file": str(state["current_structure"])},
+            "search": {"mode": {"kind": "file", "file": str(state["current_mode"])}},
+        },
+    )
+    if overrides:
+        raw = _deep_update(raw, overrides)
+    return DimerConfig.from_mapping(raw, source_path=resolved_path)
+
+
+def run_dimer(*, config=None, resume=False, **unexpected_kwargs):
     """Run a maintained dimer/Lanczos workflow from a resolved config."""
 
     if unexpected_kwargs:
@@ -846,8 +1011,10 @@ def run_dimer(*, config=None, **unexpected_kwargs):
         mode=config.mode,
         **dict(config.dimer_kwargs),
     )
+    if resume:
+        _restore_runtime_checkpoint(search, config.run_dir)
     search_kwargs = dict(config.search_kwargs)
-    search_kwargs["output_callback"] = _make_snapshot_callback(config)
+    search_kwargs["output_callback"] = _make_snapshot_callback(config, resume=bool(resume))
     search_result = search.search(**search_kwargs)
 
     downhill_result = None
@@ -879,3 +1046,12 @@ def run_dimer_from_yaml(path, *, overrides=None):
     """Load, resolve, and run a YAML-backed dimer/Lanczos workflow."""
 
     return run_dimer(config=load_dimer_config(path, overrides=overrides))
+
+
+def resume_dimer_from_run_dir(run_dir, *, overrides=None):
+    """Resume a checkpointed dimer workflow from an existing run directory."""
+
+    return run_dimer(
+        config=load_dimer_resume_config(run_dir, overrides=overrides),
+        resume=True,
+    )

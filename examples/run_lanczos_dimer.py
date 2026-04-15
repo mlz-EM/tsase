@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tsase.dimer import load_dimer_config, run_dimer
+from tsase.dimer import load_dimer_config, resume_dimer_from_run_dir, run_dimer
 
 
 DEFAULT_CONFIG = ROOT / "examples" / "configs" / "run_lanczos_dimer.yaml"
@@ -20,6 +20,8 @@ DEFAULT_CONFIG = ROOT / "examples" / "configs" / "run_lanczos_dimer.yaml"
 def parse_args(argv=None):
     parser = ArgumentParser(description=__doc__)
     parser.add_argument("--config", default=str(DEFAULT_CONFIG))
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--run-dir", default=".")
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--max-force-calls", type=int, default=None)
     parser.add_argument("--min-force", type=float, default=None)
@@ -45,8 +47,12 @@ def _build_overrides(args):
 
 def main(argv=None):
     args = parse_args(argv)
-    config = load_dimer_config(args.config, overrides=_build_overrides(args))
-    result = run_dimer(config=config)
+    overrides = _build_overrides(args)
+    if args.resume:
+        result = resume_dimer_from_run_dir(Path(args.run_dir), overrides=overrides)
+    else:
+        config = load_dimer_config(args.config, overrides=overrides)
+        result = run_dimer(config=config)
 
     print(f"Run directory: {result['run_dir']}")
     print(f"Saddle summary: {result['artifacts']['summary_file']}")
@@ -60,4 +66,3 @@ def main(argv=None):
 
 if __name__ == "__main__":
     main()
-
