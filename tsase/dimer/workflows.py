@@ -886,13 +886,13 @@ def _update_live_progress_plot(path, history, *, min_force):
         "fmax": "#1f77b4",
         "curvature": "#d62728",
         "delta_e": "#2ca02c",
-        "force_calls_step": "#9467bd",
+        "alpha": "#9467bd",
     }
     metrics = [
         ("fmax", "Fmax (eV/A)", [entry["fmax"] for entry in history]),
         ("curvature", "|Curvature|", [abs(entry["curvature"]) for entry in history]),
         ("delta_e", "dE (meV/atom)", [entry["delta_e_mev_per_atom"] for entry in history]),
-        ("force_calls_step", "FC/step", [entry["force_calls_step"] for entry in history]),
+        ("alpha", "Alpha", [entry["alpha"] for entry in history]),
     ]
     steps = [entry["step"] for entry in history]
 
