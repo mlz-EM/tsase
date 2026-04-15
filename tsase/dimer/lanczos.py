@@ -1,87 +1,104 @@
-#!/usr/bin/env python
-#lanczos algorithm for min-mode searching
+"""Lanczos min-mode variant of the solid-state dimer search."""
 
-import copy
 import numpy as np
-import sys
-import os
 
-from math import sqrt, atan, cos, sin, tan, pi
-from ase  import atoms, units, io
-from tsase.neb.util import vunit, vmag, vrand, sPBC
-from tsase.dimer.ssdimer import SSDimer_atoms
+from tsase.neb.util import vmag, vunit
 
-class lanczos_atoms(SSDimer_atoms):
+from tsase.dimer.ssdimer import SSDimer
 
-    def minmodesearch(self):
-        F0    = self.update_general_forces(self.R0)
-        F1    = self.rotation_update()
-        dphi    = 100
 
-        ## only for atom degree of freedoms
-        #u = self.N[:-3].flatten()
-        ## include cell too
-        u = self.N.flatten()
-        beta = vmag(u)
+class LanczosDimer(SSDimer):
+    """SSDimer variant that uses a Lanczos Krylov search for the min mode."""
+
+    def min_mode_search(self):
+        if not self.ss:
+            self.N = self.project_translation_rotation(self.N, self.R0)
+
+        F0 = self.update_general_forces(self.R0)
+        F1 = self.rotation_update()
+        delta_phi = 100.0
+
+        vector = self.N.flatten()
+        beta = vmag(vector)
         size = (self.natom + 3) * 3
-        #size = self.natom * 3
-        T = np.zeros((size,size))
-        Q = np.zeros((size,size))
-            
-        #while dphi > self.phi_tol and iteration < self.rotationMax:
-        for i in range(size):
-            Q[:, i] = u/beta
-            Hv      = -(F1 - F0) / self.dR
-            #u       = Hv[:-3].flatten()
-            u       = Hv.flatten()
-            if i > 0:
-                u   = u - beta * Q[:,i-1]
-            alpha   = np.vdot(Q[:, i], u)
-            u       = u - alpha * Q[:, i]
-            # re-orthogonalize
-            u       = u - np.dot(Q, np.dot(Q.T, u))
+        tridiagonal = np.zeros((size, size), dtype=float)
+        basis = np.zeros((size, size), dtype=float)
 
-            T[i, i] = alpha
-            if i > 0:
-                 T[i-1, i] = beta
-                 T[i, i-1] = beta
+        c0 = self.curvature
+        previous_mode = None
+        for iteration in range(size):
+            basis[:, iteration] = vector / beta
+            hessian_vector = -(F1 - F0) / self.dR
+            vector = hessian_vector.flatten()
 
-            beta    = vmag(u)
+            if iteration > 0:
+                vector = vector - beta * basis[:, iteration - 1]
+            alpha = np.vdot(basis[:, iteration], vector)
+            vector = vector - alpha * basis[:, iteration]
+            vector = vector - np.dot(basis, np.dot(basis.T, vector))
 
-            newN    = np.reshape(u/beta, (-1, 3))
-            #self.N[:-3] = newN
-            self.N  = newN
-            F1      = self.rotation_update()
+            tridiagonal[iteration, iteration] = alpha
+            if iteration > 0:
+                tridiagonal[iteration - 1, iteration] = beta
+                tridiagonal[iteration, iteration - 1] = beta
 
-            ##Check Eigenvalues
-            if i > 0:
-                eigenValues, eigenVectors  = np.linalg.eig(T[:i+1, :i+1])
-                idx = eigenValues.argsort()   
-                ew  = eigenValues[idx][0]
-                evT = eigenVectors[:,idx][:, 0]
-                ##Convert eigenvector of T matrix to eigenvector of full Hessian
-                evEst = Q[:, :i+1].dot(evT)
-                evEst = vunit(evEst)
-                evAtom_old = copy.copy(evAtom)
-                evAtom  = np.reshape(evEst, (-1, 3))
-                c0      = ew
-                ## check with pi/2
-                dotp = np.vdot(evAtom, evAtom_old)
-                if dotp > 1: dotp = 1
-                elif dotp < -1: dotp = -1
-                dphi    = np.arccos(dotp) 
-                if dphi > np.pi/2.0: dphi = np.pi - dphi
+            beta = vmag(vector)
+            if beta == 0:
+                break
+
+            self.N = np.reshape(vector / beta, (-1, 3))
+            if not self.ss:
+                self.N = self.project_translation_rotation(self.N, self.R0)
+            F1 = self.rotation_update()
+
+            if iteration == 0:
+                mode = np.array(self.N, copy=True)
+                c0 = np.vdot(hessian_vector, mode)
             else:
-                #evAtom  = self.N[:-3]
-                #c0      = np.vdot(Hv[:-3], evAtom)
-                evAtom  = self.N
-                c0      = np.vdot(Hv, evAtom)
-            #print "i, Curvature, dphi:", i, c0, dphi
-            if dphi < self.phi_tol or i == size-1 or i >= self.rotationMax:
-                #self.N[:-3] = evAtom
-                self.N = evAtom
+                eigenvalues, eigenvectors = np.linalg.eig(tridiagonal[: iteration + 1, : iteration + 1])
+                lowest = eigenvalues.argsort()[0]
+                c0 = float(eigenvalues[lowest])
+                estimated_mode = basis[:, : iteration + 1].dot(eigenvectors[:, lowest])
+                estimated_mode = vunit(estimated_mode)
+                mode = np.reshape(estimated_mode, (-1, 3))
+                if not self.ss:
+                    mode = self.project_translation_rotation(mode, self.R0)
+                dot_product = 0.0 if previous_mode is None else np.vdot(mode, previous_mode)
+                dot_product = min(1.0, max(-1.0, dot_product))
+                delta_phi = np.arccos(dot_product)
+                if delta_phi > np.pi / 2.0:
+                    delta_phi = np.pi - delta_phi
+
+            previous_mode = np.array(mode, copy=True)
+            if delta_phi < self.phi_tol or iteration == size - 1 or iteration >= self.rotationMax:
+                self.N = mode
                 break
 
         self.curvature = c0
         return F0
-        
+
+    minmodesearch = min_mode_search
+
+
+def run_lanczos(
+    *,
+    atoms,
+    calculator=None,
+    calculator_mode=None,
+    copy_atoms=True,
+    search_kwargs=None,
+    **dimer_kwargs,
+):
+    """Convenience wrapper for the maintained Lanczos-dimer entry point."""
+
+    search = LanczosDimer.from_atoms(
+        atoms,
+        calculator=calculator,
+        calculator_mode=calculator_mode,
+        copy_atoms=copy_atoms,
+        **dimer_kwargs,
+    )
+    return search.search(**({} if search_kwargs is None else dict(search_kwargs)))
+
+
+lanczos_atoms = LanczosDimer

@@ -1,0 +1,58 @@
+run:
+  root: ../../example/dimer_runs
+  name: lanczos_im_to_target
+
+structure:
+  file: ../../example/Pm-3m.cif
+
+model:
+  calculator:
+    kind: mace_field
+    model_path: ../../example/MACE_model.model
+  charges:
+    kind: species_map
+    values:
+      Pb: 2.4
+      Zr: 4.0
+      O: -2.1333333333
+  field:
+    kind: cartesian
+    value: [0.0, 0.0, 0.02]
+
+search:
+  method: lanczos
+  quiet: false
+  copy_atoms: true
+  mode:
+    kind: difference
+    file: ../../example/Pbam_SC_NC.cif
+    include_cell: true
+  dimer:
+    ss: true
+    maxStep: 0.1
+    dT: 0.05
+    dR: 0.001
+    phi_tol: 3.0
+    rotationMax: 12
+    weight: 1.0
+    noZeroModes: true
+
+convergence:
+  minForce: 0.01
+  maxForceCalls: 5000
+
+postprocess:
+  downhill:
+    enabled: true
+    step_size: 0.01
+    optimizer: BFGS
+    fmax: 0.01
+    max_steps: 200
+
+outputs:
+  movie: lanczos_search.vasp
+  movie_interval: 20
+  write_structures: true
+  write_mode: true
+  stem: true
+  stem_interval: 10
