@@ -136,6 +136,8 @@ def _mode_from_difference(structure, target, *, include_cell, weight):
     reference = _copy_atoms_with_calculator(structure)
     mapped_target = spatial_map(reference, target)
     atomic_mode = mapped_target.get_positions() - reference.get_positions()
+    if len(reference) > 1:
+        atomic_mode -= atomic_mode.mean(axis=0, keepdims=True)
     if not include_cell:
         return atomic_mode
     jacobian = _compute_jacobian(reference, weight)

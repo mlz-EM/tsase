@@ -148,6 +148,55 @@ class DimerYamlWorkflowTests(unittest.TestCase):
             self.assertTrue(config.filter_settings["constant_volume"])
             self.assertIsNotNone(config.filter_factory)
 
+    def test_difference_mode_removes_global_translation_once(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            start = Atoms(
+                "Cu2",
+                positions=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+                cell=[5.0, 5.0, 5.0],
+                pbc=True,
+            )
+            shifted = Atoms(
+                "Cu2",
+                positions=[[0.3, -0.2, 0.1], [1.3, -0.2, 0.1]],
+                cell=[5.0, 5.0, 5.0],
+                pbc=True,
+            )
+            start_path = root / "start.xyz"
+            shifted_path = root / "shifted.xyz"
+            write(start_path, start, format="extxyz")
+            write(shifted_path, shifted, format="extxyz")
+            config_path = root / "translation_free.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "run:",
+                        "  root: run",
+                        "structure:",
+                        "  file: start.xyz",
+                        "model:",
+                        "  calculator:",
+                        "    kind: emt",
+                        "search:",
+                        "  method: ssdimer",
+                        "  quiet: true",
+                        "  mode:",
+                        "    kind: difference",
+                        "    file: shifted.xyz",
+                        "  dimer:",
+                        "    ss: false",
+                        "    noZeroModes: false",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            config = load_dimer_config(config_path)
+
+            self.assertTrue(np.allclose(config.mode, np.zeros((2, 3))))
+
     def test_run_dimer_from_yaml_executes_lanczos_workflow(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
