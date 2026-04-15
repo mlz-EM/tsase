@@ -763,19 +763,25 @@ def _make_snapshot_callback(config):
         or config.output_settings.get("stem", False)
         or config.output_settings.get("progress_log", True)
         or config.output_settings.get("live_plot", True)
+        or config.output_settings.get("write_mode", True)
     ):
         return None
 
     iteration_dir = config.run_dir / "iterations"
     stem_dir = config.run_dir / "stem"
     log_dir = config.run_dir / "logs"
+    saddle_dir = config.run_dir / "saddle"
     progress_log = log_dir / "dimer_progress.tsv"
     live_plot = log_dir / "live_progress.png"
+    mode_path = saddle_dir / "mode.npy"
     interval = max(1, int(config.output_settings.get("stem_interval", 10)))
     history = []
 
     def callback(search):
         diagnostics = dict(search.step_diagnostics)
+        if config.output_settings.get("write_mode", True):
+            saddle_dir.mkdir(parents=True, exist_ok=True)
+            np.save(mode_path, np.array(search.get_mode(), dtype=float))
         if config.output_settings.get("progress_log", True):
             _append_progress_row(progress_log, diagnostics)
         if config.output_settings.get("live_plot", True):
