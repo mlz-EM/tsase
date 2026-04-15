@@ -97,6 +97,57 @@ class DimerYamlWorkflowTests(unittest.TestCase):
             self.assertTrue(np.allclose(config.mode, [[0.2, 0.0, 0.0]]))
             self.assertEqual(DummyMaceFieldCalculator.last_init_kwargs["electric_field"], [0.0, 0.0, 0.02])
 
+    def test_load_dimer_config_parses_cell_filter_constraints(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            im_path, fe_path = self._write_structure_files(root)
+            config_path = root / "lanczos_filter.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "run:",
+                        "  root: run",
+                        "  name: im_search",
+                        "structure:",
+                        "  file: im.xyz",
+                        "model:",
+                        "  calculator:",
+                        "    kind: mace_field",
+                        "    model_path: dummy.model",
+                        "  charges:",
+                        "    kind: array",
+                        "    values: [1.0]",
+                        "  field:",
+                        "    kind: cartesian",
+                        "    value: [0.0, 0.0, 0.02]",
+                        "search:",
+                        "  method: lanczos",
+                        "  quiet: true",
+                        "  mode:",
+                        "    kind: difference",
+                        f"    file: {fe_path.name}",
+                        "  dimer:",
+                        "    ss: true",
+                        "constraints:",
+                        "  filter:",
+                        "    mask: [0, 1, 0, 1, 0, 1]",
+                        "    constant_volume: true",
+                        "convergence:",
+                        "  minForce: 10.0",
+                        "  maxForceCalls: 2",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch("tsase.dimer.workflows.load_mace_calculator", return_value=DummyMaceFieldCalculator):
+                config = load_dimer_config(config_path)
+
+            self.assertEqual(config.filter_settings["mask"], [0, 1, 0, 1, 0, 1])
+            self.assertTrue(config.filter_settings["constant_volume"])
+            self.assertIsNotNone(config.filter_factory)
+
     def test_run_dimer_from_yaml_executes_lanczos_workflow(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

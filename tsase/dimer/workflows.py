@@ -196,6 +196,51 @@ def _normalize_downhill_settings(settings):
     }
 
 
+def _build_filter_factory(filter_config):
+    filter_config = dict(filter_config or {})
+    if not filter_config:
+        return None, {}
+    if "kind" in filter_config:
+        raise ValueError(
+            "constraints.filter.kind is no longer supported; "
+            "the maintained dimer workflow always uses FrechetCellFilter"
+        )
+    if not bool(filter_config.get("enabled", True)):
+        return None, {"enabled": False}
+
+    mask = filter_config.get("mask")
+    hydrostatic_strain = bool(filter_config.get("hydrostatic_strain", False))
+    constant_volume = bool(filter_config.get("constant_volume", False))
+    move_atoms = bool(filter_config.get("move_atoms", True))
+    if not move_atoms:
+        raise ValueError(
+            "constraints.filter.move_atoms=false is no longer supported; "
+            "the maintained dimer workflow always uses FrechetCellFilter"
+        )
+
+    from ase.filters import FrechetCellFilter
+
+    exp_cell_factor = filter_config.get("exp_cell_factor")
+    normalized = {
+        "enabled": True,
+        "mask": mask,
+        "hydrostatic_strain": hydrostatic_strain,
+        "constant_volume": constant_volume,
+    }
+    if exp_cell_factor is not None:
+        normalized["exp_cell_factor"] = exp_cell_factor
+    return (
+        lambda image: FrechetCellFilter(
+            image,
+            mask=mask,
+            exp_cell_factor=exp_cell_factor,
+            hydrostatic_strain=hydrostatic_strain,
+            constant_volume=constant_volume,
+        ),
+        normalized,
+    )
+
+
 def _normalize_output_settings(settings):
     settings = dict(settings or {})
     return {
@@ -298,6 +343,8 @@ class RelaxationResult:
 class DownhillConnectionResult:
     """Result from relaxing both downhill branches from a saddle."""
 
+    positive_seed: object
+    negative_seed: object
     positive: RelaxationResult
     negative: RelaxationResult
     mode: np.ndarray
@@ -330,6 +377,8 @@ class DimerConfig:
     dimer_kwargs: dict = field(default_factory=dict)
     search_kwargs: dict = field(default_factory=dict)
     downhill_settings: dict = field(default_factory=dict)
+    filter_factory: object = None
+    filter_settings: dict = field(default_factory=dict)
     output_settings: dict = field(default_factory=dict)
     config_path: Optional[Path] = None
     resolved_config: dict = field(default_factory=dict)
@@ -352,6 +401,8 @@ class DimerConfig:
         dimer_kwargs=None,
         search_kwargs=None,
         downhill_settings=None,
+        filter_factory=None,
+        filter_settings=None,
         output_settings=None,
         resolved_config=None,
     ):
@@ -377,6 +428,8 @@ class DimerConfig:
             dimer_kwargs={} if dimer_kwargs is None else dict(dimer_kwargs),
             search_kwargs={} if search_kwargs is None else dict(search_kwargs),
             downhill_settings=_normalize_downhill_settings(downhill_settings),
+            filter_factory=filter_factory,
+            filter_settings={} if filter_settings is None else dict(filter_settings),
             output_settings=_normalize_output_settings(output_settings),
             resolved_config={} if resolved_config is None else dict(resolved_config),
         )
@@ -435,6 +488,7 @@ class DimerConfig:
         }
 
         downhill_settings = _normalize_downhill_settings(dict(mapping.get("postprocess", {})).get("downhill"))
+        filter_factory, filter_settings = _build_filter_factory(dict(dict(mapping.get("constraints", {})).get("filter", {})))
         output_settings = _normalize_output_settings(outputs)
 
         resolved_config = {
@@ -467,6 +521,7 @@ class DimerConfig:
                 "progress_log": output_settings["progress_log"],
                 "live_plot": output_settings["live_plot"],
             },
+            "constraints": {"filter": dict(filter_settings)},
             "postprocess": {"downhill": dict(downhill_settings)},
         }
         if reference_atoms is not None:
@@ -486,6 +541,8 @@ class DimerConfig:
             dimer_kwargs=dimer_kwargs,
             search_kwargs=search_kwargs,
             downhill_settings=downhill_settings,
+            filter_factory=filter_factory,
+            filter_settings=filter_settings,
             output_settings=output_settings,
             config_path=source_path,
             resolved_config=resolved_config,
@@ -551,15 +608,31 @@ def apply_mode_displacement(atoms, mode, *, step_size, ss=False, weight=1.0):
     return displaced
 
 
-def relax_structure(atoms, *, optimizer="BFGS", fmax=0.01, max_steps=200):
+def relax_structure(
+    atoms,
+    *,
+    optimizer="BFGS",
+    fmax=0.01,
+    max_steps=200,
+    ss=False,
+    filter_factory=None,
+):
     """Relax one structure with a small maintained optimizer surface."""
 
     working = _copy_atoms_with_calculator(atoms)
+    target = working
+    if ss:
+        if filter_factory is None:
+            from ase.filters import FrechetCellFilter
+
+            target = FrechetCellFilter(working)
+        else:
+            target = filter_factory(working)
     optimizer_name = str(optimizer).upper()
     if optimizer_name == "BFGS":
-        dyn = BFGS(working, logfile=None)
+        dyn = BFGS(target, logfile=None)
     elif optimizer_name == "FIRE":
-        dyn = FIRE(working, logfile=None)
+        dyn = FIRE(target, logfile=None)
     else:
         raise ValueError("optimizer must be one of: BFGS, FIRE")
     converged = dyn.run(fmax=float(fmax), steps=int(max_steps))
@@ -583,6 +656,7 @@ def relax_downhill_from_saddle(
     optimizer="BFGS",
     fmax=0.01,
     max_steps=200,
+    filter_factory=None,
 ):
     """Relax both downhill branches by displacing along ``+/- mode`` from a saddle."""
 
@@ -605,14 +679,20 @@ def relax_downhill_from_saddle(
         optimizer=optimizer,
         fmax=fmax,
         max_steps=max_steps,
+        ss=ss,
+        filter_factory=filter_factory,
     )
     negative = relax_structure(
         negative_seed,
         optimizer=optimizer,
         fmax=fmax,
         max_steps=max_steps,
+        ss=ss,
+        filter_factory=filter_factory,
     )
     return DownhillConnectionResult(
+        positive_seed=positive_seed,
+        negative_seed=negative_seed,
         positive=positive,
         negative=negative,
         mode=np.array(mode, dtype=float, copy=True),
@@ -697,6 +777,8 @@ def _write_workflow_outputs(config, search, search_result, downhill_result):
         "runtime_state": run_dir / "state" / "runtime_state.json",
         "progress_log": run_dir / "logs" / "dimer_progress.tsv",
         "live_plot": run_dir / "logs" / "live_progress.png",
+        "positive_seed_structure": None,
+        "negative_seed_structure": None,
         "positive_structure": None,
         "negative_structure": None,
         "connections_summary": None,
@@ -720,15 +802,23 @@ def _write_workflow_outputs(config, search, search_result, downhill_result):
     }
 
     if downhill_result is not None:
+        positive_seed_path = connections_dir / "downhill_positive_seed.cif"
+        negative_seed_path = connections_dir / "downhill_negative_seed.cif"
         positive_path = connections_dir / "downhill_positive.cif"
         negative_path = connections_dir / "downhill_negative.cif"
         if config.output_settings.get("write_structures", True):
+            write(str(positive_seed_path), downhill_result.positive_seed)
+            write(str(negative_seed_path), downhill_result.negative_seed)
             write(str(positive_path), downhill_result.positive.atoms)
             write(str(negative_path), downhill_result.negative.atoms)
+        artifacts["positive_seed_structure"] = positive_seed_path
+        artifacts["negative_seed_structure"] = negative_seed_path
         artifacts["positive_structure"] = positive_path
         artifacts["negative_structure"] = negative_path
         downhill_summary = {
             "step_size": float(downhill_result.step_size),
+            "positive_seed": str(positive_seed_path),
+            "negative_seed": str(negative_seed_path),
             "positive": {
                 "converged": bool(downhill_result.positive.converged),
                 "energy": float(downhill_result.positive.energy),
@@ -1052,6 +1142,7 @@ def run_dimer(*, config=None, resume=False, **unexpected_kwargs):
             optimizer=config.downhill_settings["optimizer"],
             fmax=config.downhill_settings["fmax"],
             max_steps=config.downhill_settings["max_steps"],
+            filter_factory=config.filter_factory,
         )
 
     artifacts = _write_workflow_outputs(config, search, search_result, downhill_result)

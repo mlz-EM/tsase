@@ -6,6 +6,7 @@ from unittest import mock
 import numpy as np
 from ase import Atoms
 from ase.calculators.calculator import Calculator, all_changes
+from ase.filters import FrechetCellFilter
 from ase.io import write
 
 from tsase.dimer import (
@@ -42,6 +43,21 @@ class DoubleWellCalculator(Calculator):
 
 
 class DimerHelperTests(unittest.TestCase):
+    class RecordingOptimizer:
+        targets = []
+
+        def __init__(self, target, logfile=None):
+            type(self).targets.append(target)
+            self.target = target
+            self._steps = 0
+
+        def run(self, fmax=None, steps=None):
+            self._steps = 1
+            return True
+
+        def get_number_of_steps(self):
+            return self._steps
+
     def test_apply_mode_displacement_moves_atoms_along_mode(self):
         atoms = Atoms("Cu", positions=[[0.0, 0.0, 0.0]], cell=[5.0, 5.0, 5.0], pbc=True)
         atoms.calc = DoubleWellCalculator()
@@ -94,6 +110,25 @@ class DimerHelperTests(unittest.TestCase):
 
         self.assertEqual(labels["positive"].label, "right")
         self.assertEqual(labels["negative"].label, "left")
+
+    def test_relax_downhill_from_saddle_uses_cell_filter_for_ss(self):
+        saddle = Atoms("Cu", positions=[[0.0, 0.0, 0.0]], cell=[5.0, 5.0, 5.0], pbc=True)
+        saddle.calc = DoubleWellCalculator()
+        self.RecordingOptimizer.targets = []
+
+        with mock.patch("tsase.dimer.workflows.BFGS", self.RecordingOptimizer):
+            relax_downhill_from_saddle(
+                saddle,
+                np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.01, 0.0, 0.0]]),
+                step_size=0.1,
+                ss=True,
+                optimizer="BFGS",
+                fmax=1.0e-4,
+                max_steps=5,
+            )
+
+        self.assertEqual(len(self.RecordingOptimizer.targets), 2)
+        self.assertTrue(all(isinstance(target, FrechetCellFilter) for target in self.RecordingOptimizer.targets))
 
     def test_run_dimer_from_yaml_writes_downhill_artifacts(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -157,6 +192,8 @@ class DimerHelperTests(unittest.TestCase):
 
             self.assertIsNotNone(result["downhill_result"])
             self.assertTrue(Path(result["artifacts"]["connections_summary"]).exists())
+            self.assertTrue(Path(result["artifacts"]["positive_seed_structure"]).exists())
+            self.assertTrue(Path(result["artifacts"]["negative_seed_structure"]).exists())
             self.assertTrue(Path(result["artifacts"]["positive_structure"]).exists())
             self.assertTrue(Path(result["artifacts"]["negative_structure"]).exists())
             self.assertTrue((result["run_dir"] / "iterations" / "iter_0001.cif").exists())
