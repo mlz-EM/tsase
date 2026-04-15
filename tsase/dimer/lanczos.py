@@ -26,6 +26,10 @@ class LanczosDimer(SSDimer):
 
         c0 = self.curvature
         previous_mode = None
+        mode_status = "rotating"
+        self.last_rotation_substeps = 0
+        self.last_rotation_angle_deg = 0.0
+        self.last_mode_status = mode_status
         for iteration in range(size):
             basis[:, iteration] = vector / beta
             hessian_vector = -(F1 - F0) / self.dR
@@ -44,6 +48,9 @@ class LanczosDimer(SSDimer):
 
             beta = vmag(vector)
             if beta == 0:
+                self.last_rotation_substeps = int(iteration + 1)
+                self.last_rotation_angle_deg = 0.0
+                self.last_mode_status = "locked"
                 break
 
             self.N = np.reshape(vector / beta, (-1, 3))
@@ -72,6 +79,10 @@ class LanczosDimer(SSDimer):
             previous_mode = np.array(mode, copy=True)
             if delta_phi < self.phi_tol or iteration == size - 1 or iteration >= self.rotationMax:
                 self.N = mode
+                mode_status = "locked" if delta_phi < self.phi_tol else "rotating"
+                self.last_rotation_substeps = int(iteration + 1)
+                self.last_rotation_angle_deg = float(delta_phi * 180.0 / np.pi)
+                self.last_mode_status = mode_status
                 break
 
         self.curvature = c0

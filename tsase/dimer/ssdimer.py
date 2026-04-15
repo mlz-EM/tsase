@@ -100,6 +100,15 @@ class SSDimer:
         self.curvature = 1.0
         self.converged = False
         self.E = None
+        self.initial_energy = None
+        self.target_min_force = None
+        self.step_diagnostics = {}
+        self.last_rotation_substeps = 0
+        self.last_rotation_angle_deg = 0.0
+        self.last_mode_status = "rotating"
+        self.last_alpha = 0.0
+        self.last_ftrans_norm = 0.0
+        self.last_translation_mode = "drag_up"
 
         self.R1 = self._copy_runtime_atoms(self.R0)
         self.R1_prime = self._copy_runtime_atoms(self.R0)
@@ -233,14 +242,15 @@ class SSDimer:
         Fperp = F0 - Fparallel
         f0_magnitude = vmag(F0)
         alpha = 0.0 if f0_magnitude == 0 else vmag(Fperp) / f0_magnitude
-        print("alpha=vmag(Fperp)/vmag(F0): ", alpha)
-        print("curvature:", self.get_curvature())
+        self.last_alpha = float(alpha)
 
         if self.curvature > 0:
             self.Ftrans = -1.0 * Fparallel
-            print("drag up directly")
+            self.last_translation_mode = "drag_up"
         else:
             self.Ftrans = Fperp - Fparallel
+            self.last_translation_mode = "climb"
+        self.last_ftrans_norm = float(vmag(self.Ftrans))
         if self.ss:
             return self.Ftrans
         return self.Ftrans[:-3]
@@ -331,6 +341,8 @@ class SSDimer:
         Fperp = np.zeros_like(F1)
         iteration = 0
         c0 = self.curvature
+        rotation_angle_deg = 0.0
+        mode_status = "rotating"
 
         while abs(phi_min) > self.phi_tol and iteration < self.rotationMax:
             if iteration == 0:
@@ -346,6 +358,8 @@ class SSDimer:
             c0d = np.vdot(F0 - F1, self.T) / self.dR * 2.0
             phi_1 = -0.5 * _safe_atan_ratio(c0d, 2.0 * abs(c0))
             if abs(phi_1) <= self.phi_tol:
+                rotation_angle_deg = abs(phi_1) * 180.0 / pi
+                mode_status = "locked"
                 break
 
             rotated_mode = vunit(self.N * cos(phi_1) + self.T * sin(phi_1))
@@ -383,8 +397,13 @@ class SSDimer:
             Fperp = 2.0 * (F1perp - F0perp)
             self.rotation_plane(Fperp, Fperp_old, previous_mode)
             iteration += 1
+            rotation_angle_deg = abs(phi_min) * 180.0 / pi
+            mode_status = "locked" if abs(phi_min) <= self.phi_tol else "rotating"
 
         self.curvature = c0
+        self.last_rotation_substeps = int(iteration)
+        self.last_rotation_angle_deg = float(rotation_angle_deg)
+        self.last_mode_status = mode_status
         return F0
 
     def step(self):
@@ -393,8 +412,10 @@ class SSDimer:
             self.V = np.zeros(shape, dtype=float)
 
         self.steps += 1
+        force_calls_before = self.forceCalls
         Ftrans = self.get_forces()
-        print("Ftrans", vmag(Ftrans))
+        if self.initial_energy is None:
+            self.initial_energy = float(getattr(self.R0, "u", 0.0))
         dV = Ftrans * self.dT
         if np.vdot(self.V, Ftrans) > 0 and np.vdot(dV, dV) != 0:
             self.V = dV * (1.0 + np.vdot(dV, self.V) / np.vdot(dV, dV))
@@ -404,19 +425,65 @@ class SSDimer:
         step = self.V * self.dT
         if vmag(step) > self.maxStep:
             step = self.maxStep * vunit(step)
+        step_norm = float(vmag(step))
 
         self.set_positions(self.get_positions() + step)
         self.E = float(self.get_potential_energy())
         self._record_calculator_results(self.R0, self.E)
+        if self.initial_energy is None:
+            self.initial_energy = float(self.E)
+        force_calls_step = int(self.forceCalls - force_calls_before)
+        max_force = float(self.get_max_atom_force())
+        self.step_diagnostics = {
+            "step": int(self.steps),
+            "region": self._classify_region(max_force),
+            "fmax": max_force,
+            "curvature": float(self.curvature),
+            "delta_e_mev_per_atom": float(1000.0 * (self.E - self.initial_energy) / self.natom),
+            "step_norm": step_norm,
+            "force_calls_step": force_calls_step,
+            "force_calls_total": int(self.forceCalls),
+            "alpha": float(self.last_alpha),
+            "rotation_angle_deg": float(self.last_rotation_angle_deg),
+            "rotation_substeps": int(self.last_rotation_substeps),
+            "ftrans_norm": float(self.last_ftrans_norm),
+            "mode_status": str(self.last_mode_status),
+            "translation_mode": str(self.last_translation_mode),
+            "converged": bool(max_force <= (self.target_min_force or 0.0) and self.curvature <= 0.0),
+        }
 
     def get_max_atom_force(self):
         if self.Ftrans is None:
             return 1000.0
         return max(vmag(component) for component in self.Ftrans)
 
+    def _classify_region(self, max_force):
+        threshold = 0.0 if self.target_min_force is None else float(self.target_min_force)
+        if self.curvature > 0:
+            return "stable"
+        if max_force <= threshold:
+            return "converged"
+        if threshold > 0 and max_force <= 5.0 * threshold:
+            return "refine"
+        return "saddle"
+
     def _print_search_header(self):
-        print("Iteration       Force       Curvature        Energy     ForceCalls")
-        print("-------------------------------------------------------------------------------")
+        print("Step  Region     Fmax(eV/A)      Curv   dE(meV/atom)   StepNorm  FC(step/tot)   Alpha   Mode")
+        print("------------------------------------------------------------------------------------------------")
+
+    def _format_progress_line(self):
+        diagnostics = dict(self.step_diagnostics)
+        return (
+            f"{diagnostics['step']:4d}  "
+            f"{diagnostics['region']:<9}"
+            f"{diagnostics['fmax']:12.6f}  "
+            f"{diagnostics['curvature']:9.6f}  "
+            f"{diagnostics['delta_e_mev_per_atom']:13.6f}  "
+            f"{diagnostics['step_norm']:9.6f}  "
+            f"{diagnostics['force_calls_step']:3d}/{diagnostics['force_calls_total']:<7d}  "
+            f"{diagnostics['alpha']:7.4f}  "
+            f"{diagnostics['mode_status']}"
+        )
 
     def build_result(self):
         return DimerSearchResult(
@@ -441,6 +508,9 @@ class SSDimer:
         output_callback=None,
     ):
         self.converged = False
+        self.initial_energy = None
+        self.target_min_force = float(minForce)
+        self.step_diagnostics = {}
         if movie:
             io.write(movie, self.R0, format="vasp")
 
@@ -454,21 +524,12 @@ class SSDimer:
                 output_callback(self)
 
             if not quiet:
-                if self.steps % 100 == 0 or self.steps == 1:
+                if self.steps % 50 == 0 or self.steps == 1:
                     self._print_search_header()
-                print(
-                    "%3i %13.6f %13.6f %13.6f %3i"
-                    % (
-                        self.steps,
-                        float(self.get_max_atom_force()),
-                        float(self.curvature),
-                        float(self.E),
-                        self.forceCalls,
-                    )
-                )
+                print(self._format_progress_line())
             cc = self.curvature
 
-        if self.get_max_atom_force() <= minForce:
+        if self.get_max_atom_force() <= minForce and self.curvature <= 0:
             self.converged = True
         return self.build_result()
 

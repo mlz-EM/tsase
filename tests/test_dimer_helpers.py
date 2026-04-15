@@ -158,6 +158,11 @@ class DimerHelperTests(unittest.TestCase):
             self.assertTrue(Path(result["artifacts"]["positive_structure"]).exists())
             self.assertTrue(Path(result["artifacts"]["negative_structure"]).exists())
             self.assertTrue((result["run_dir"] / "iterations" / "iter_0001.cif").exists())
+            self.assertTrue((result["run_dir"] / "logs" / "dimer_progress.tsv").exists())
+            self.assertTrue((result["run_dir"] / "logs" / "live_progress.png").exists())
+            progress_log = (result["run_dir"] / "logs" / "dimer_progress.tsv").read_text(encoding="utf-8")
+            self.assertIn("delta_e_mev_per_atom", progress_log)
+            self.assertIn("\n1\t", progress_log)
             self.assertGreaterEqual(stem_mock.call_count, 1)
 
 

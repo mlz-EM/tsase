@@ -172,6 +172,18 @@ def _normalize_downhill_settings(settings):
     }
 
 
+def _normalize_output_settings(settings):
+    settings = dict(settings or {})
+    return {
+        "write_structures": bool(settings.get("write_structures", True)),
+        "write_mode": bool(settings.get("write_mode", True)),
+        "stem": bool(settings.get("stem", False)),
+        "stem_interval": int(settings.get("stem_interval", 10)),
+        "progress_log": bool(settings.get("progress_log", True)),
+        "live_plot": bool(settings.get("live_plot", True)),
+    }
+
+
 def _write_json(path, payload):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -282,7 +294,7 @@ class DimerConfig:
             dimer_kwargs={} if dimer_kwargs is None else dict(dimer_kwargs),
             search_kwargs={} if search_kwargs is None else dict(search_kwargs),
             downhill_settings=_normalize_downhill_settings(downhill_settings),
-            output_settings={} if output_settings is None else dict(output_settings),
+            output_settings=_normalize_output_settings(output_settings),
             resolved_config={} if resolved_config is None else dict(resolved_config),
         )
 
@@ -340,12 +352,7 @@ class DimerConfig:
         }
 
         downhill_settings = _normalize_downhill_settings(dict(mapping.get("postprocess", {})).get("downhill"))
-        output_settings = {
-            "write_structures": bool(outputs.get("write_structures", True)),
-            "write_mode": bool(outputs.get("write_mode", True)),
-            "stem": bool(outputs.get("stem", False)),
-            "stem_interval": int(outputs.get("stem_interval", 10)),
-        }
+        output_settings = _normalize_output_settings(outputs)
 
         resolved_config = {
             "run": {"root": str(run_dir.parent), "name": run_dir.name},
@@ -373,6 +380,8 @@ class DimerConfig:
                 "write_mode": output_settings["write_mode"],
                 "stem": output_settings["stem"],
                 "stem_interval": output_settings["stem_interval"],
+                "progress_log": output_settings["progress_log"],
+                "live_plot": output_settings["live_plot"],
             },
             "postprocess": {"downhill": dict(downhill_settings)},
         }
@@ -596,6 +605,9 @@ def _write_workflow_outputs(config, search, search_result, downhill_result):
         "saddle_mode": saddle_dir / "mode.npy",
         "iteration_dir": run_dir / "iterations",
         "stem_dir": run_dir / "stem",
+        "log_dir": run_dir / "logs",
+        "progress_log": run_dir / "logs" / "dimer_progress.tsv",
+        "live_plot": run_dir / "logs" / "live_progress.png",
         "positive_structure": None,
         "negative_structure": None,
         "connections_summary": None,
@@ -648,22 +660,137 @@ def _write_workflow_outputs(config, search, search_result, downhill_result):
     return artifacts
 
 
+def _write_progress_header(path):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    header = (
+        "step\tregion\tfmax_ev_per_a\tcurvature\tdelta_e_mev_per_atom\tstep_norm\t"
+        "force_calls_step\tforce_calls_total\talpha\trotation_angle_deg\t"
+        "rotation_substeps\tftrans_norm\tmode_status\ttranslation_mode\tconverged\n"
+    )
+    path.write_text(header, encoding="utf-8")
+
+
+def _append_progress_row(path, diagnostics):
+    path = Path(path)
+    if not path.exists():
+        _write_progress_header(path)
+    row = (
+        f"{int(diagnostics['step'])}\t{diagnostics['region']}\t"
+        f"{float(diagnostics['fmax']):.10f}\t{float(diagnostics['curvature']):.10f}\t"
+        f"{float(diagnostics['delta_e_mev_per_atom']):.10f}\t{float(diagnostics['step_norm']):.10f}\t"
+        f"{int(diagnostics['force_calls_step'])}\t{int(diagnostics['force_calls_total'])}\t"
+        f"{float(diagnostics['alpha']):.10f}\t{float(diagnostics['rotation_angle_deg']):.10f}\t"
+        f"{int(diagnostics['rotation_substeps'])}\t{float(diagnostics['ftrans_norm']):.10f}\t"
+        f"{diagnostics['mode_status']}\t{diagnostics['translation_mode']}\t"
+        f"{str(bool(diagnostics['converged'])).lower()}\n"
+    )
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(row)
+
+
+def _update_live_progress_plot(path, history, *, min_force):
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception:
+        return None
+
+    if not history:
+        return None
+
+    colors = {
+        "fmax": "#1f77b4",
+        "curvature": "#d62728",
+        "delta_e": "#2ca02c",
+        "force_calls_step": "#9467bd",
+    }
+    metrics = [
+        ("fmax", "Fmax (eV/A)", [entry["fmax"] for entry in history]),
+        ("curvature", "Curvature", [entry["curvature"] for entry in history]),
+        ("delta_e", "dE (meV/atom)", [entry["delta_e_mev_per_atom"] for entry in history]),
+        ("force_calls_step", "FC/step", [entry["force_calls_step"] for entry in history]),
+    ]
+    steps = [entry["step"] for entry in history]
+
+    fig, host = plt.subplots(figsize=(10, 5.5))
+    fig.subplots_adjust(right=0.78)
+    host.set_xlabel("Step")
+    host.set_yticks([])
+    host.spines["left"].set_visible(False)
+    host.spines["right"].set_visible(False)
+
+    axes = []
+    lines = []
+    for index, (key, label, values) in enumerate(metrics):
+        axis = host.twinx()
+        axis.spines["right"].set_position(("axes", 1.0 + 0.12 * index))
+        axis.spines["right"].set_visible(True)
+        axis.yaxis.set_label_position("right")
+        axis.yaxis.tick_right()
+        axis.tick_params(axis="y", colors=colors[key], labelsize=9)
+        axis.spines["right"].set_color(colors[key])
+        axis.set_ylabel(label, color=colors[key], fontsize=10)
+        line, = axis.plot(steps, values, color=colors[key], linewidth=1.8, label=label)
+        if key == "fmax":
+            positive_values = [max(value, 1.0e-12) for value in values]
+            line.set_ydata(positive_values)
+            axis.set_yscale("log")
+            axis.axhline(max(min_force, 1.0e-12), color=colors[key], linestyle="--", linewidth=1.0, alpha=0.7)
+        if key == "curvature":
+            axis.axhline(0.0, color=colors[key], linestyle="--", linewidth=1.0, alpha=0.7)
+        axes.append(axis)
+        lines.append(line)
+
+    latest = history[-1]
+    title = (
+        f"Step {latest['step']} | {latest['region']} | "
+        f"Fmax={latest['fmax']:.4e} eV/A | Curv={latest['curvature']:.4e}"
+    )
+    host.set_title(title)
+    host.grid(True, axis="x", alpha=0.25)
+    host.legend(lines, [line.get_label() for line in lines], loc="upper left", frameon=False)
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return Path(path)
+
+
 def _make_snapshot_callback(config):
     if not (
         config.output_settings.get("write_structures", True)
         or config.output_settings.get("stem", False)
+        or config.output_settings.get("progress_log", True)
+        or config.output_settings.get("live_plot", True)
     ):
         return None
 
     iteration_dir = config.run_dir / "iterations"
     stem_dir = config.run_dir / "stem"
+    log_dir = config.run_dir / "logs"
+    progress_log = log_dir / "dimer_progress.tsv"
+    live_plot = log_dir / "live_progress.png"
     interval = max(1, int(config.output_settings.get("stem_interval", 10)))
+    history = []
 
     def callback(search):
+        diagnostics = dict(search.step_diagnostics)
+        if config.output_settings.get("progress_log", True):
+            _append_progress_row(progress_log, diagnostics)
+        if config.output_settings.get("live_plot", True):
+            log_dir.mkdir(parents=True, exist_ok=True)
+            history.append(diagnostics)
+            _update_live_progress_plot(
+                live_plot,
+                history,
+                min_force=float(search.target_min_force or 0.0),
+            )
         if search.steps == 1 or search.steps % interval == 0:
-            iteration_dir.mkdir(parents=True, exist_ok=True)
             snapshot_path = iteration_dir / f"iter_{int(search.steps):04d}.cif"
-            write(str(snapshot_path), search.R0)
+            if config.output_settings.get("write_structures", True) or config.output_settings.get("stem", False):
+                iteration_dir.mkdir(parents=True, exist_ok=True)
+                write(str(snapshot_path), search.R0)
             if config.output_settings.get("stem", False):
                 result = analyze_stem_sequence_from_xyz(
                     snapshot_path,
