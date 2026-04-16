@@ -783,6 +783,8 @@ def _write_workflow_outputs(config, search, search_result, downhill_result):
         "negative_seed_structure": None,
         "positive_structure": None,
         "negative_structure": None,
+        "positive_stem_dir": None,
+        "negative_stem_dir": None,
         "connections_summary": None,
     }
 
@@ -808,7 +810,7 @@ def _write_workflow_outputs(config, search, search_result, downhill_result):
         negative_seed_path = connections_dir / "downhill_negative_seed.cif"
         positive_path = connections_dir / "downhill_positive.cif"
         negative_path = connections_dir / "downhill_negative.cif"
-        if config.output_settings.get("write_structures", True):
+        if config.output_settings.get("write_structures", True) or config.output_settings.get("stem", False):
             write(str(positive_seed_path), downhill_result.positive_seed)
             write(str(negative_seed_path), downhill_result.negative_seed)
             write(str(positive_path), downhill_result.positive.atoms)
@@ -817,6 +819,21 @@ def _write_workflow_outputs(config, search, search_result, downhill_result):
         artifacts["negative_seed_structure"] = negative_seed_path
         artifacts["positive_structure"] = positive_path
         artifacts["negative_structure"] = negative_path
+        if config.output_settings.get("stem", False):
+            positive_stem_result = analyze_stem_sequence_from_xyz(
+                positive_path,
+                output_dir=artifacts["stem_dir"] / "downhill_positive",
+                emit_npy=False,
+            )
+            negative_stem_result = analyze_stem_sequence_from_xyz(
+                negative_path,
+                output_dir=artifacts["stem_dir"] / "downhill_negative",
+                emit_npy=False,
+            )
+            if isinstance(positive_stem_result, dict):
+                artifacts["positive_stem_dir"] = positive_stem_result.get("output_dir")
+            if isinstance(negative_stem_result, dict):
+                artifacts["negative_stem_dir"] = negative_stem_result.get("output_dir")
         downhill_summary = {
             "step_size": float(downhill_result.step_size),
             "positive_seed": str(positive_seed_path),
@@ -826,12 +843,14 @@ def _write_workflow_outputs(config, search, search_result, downhill_result):
                 "energy": float(downhill_result.positive.energy),
                 "steps": int(downhill_result.positive.steps),
                 "optimizer": downhill_result.positive.optimizer,
+                "stem_dir": artifacts["positive_stem_dir"],
             },
             "negative": {
                 "converged": bool(downhill_result.negative.converged),
                 "energy": float(downhill_result.negative.energy),
                 "steps": int(downhill_result.negative.steps),
                 "optimizer": downhill_result.negative.optimizer,
+                "stem_dir": artifacts["negative_stem_dir"],
             },
         }
         artifacts["connections_summary"] = _write_json(connections_dir / "summary.json", downhill_summary)

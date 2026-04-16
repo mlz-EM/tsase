@@ -207,7 +207,7 @@ class DimerHelperTests(unittest.TestCase):
             progress_log = (result["run_dir"] / "logs" / "dimer_progress.tsv").read_text(encoding="utf-8")
             self.assertIn("delta_e_mev_per_atom", progress_log)
             self.assertIn("\n1\t", progress_log)
-            self.assertGreaterEqual(stem_mock.call_count, 1)
+            self.assertGreaterEqual(stem_mock.call_count, 3)
 
     def test_resume_dimer_from_run_dir_restores_checkpoint(self):
         with tempfile.TemporaryDirectory() as tmpdir:
