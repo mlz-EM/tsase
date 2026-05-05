@@ -22,6 +22,7 @@ from tsase.neb.workflows import (
     preprocess_field_ssneb_control_points,
     run_field_ssneb,
 )
+from tsase.neb.runtime import detect_world_size
 
 
 DEFAULT_CONFIG = "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/preprocessed/run_field_ssneb_interpolated/run_field_ssneb_interpolated_preprocessed.yaml" #ROOT / "examples" / "configs" / "run_field_ssneb_interpolated.yaml"
@@ -34,6 +35,8 @@ def parse_args(argv=None):
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--fmax", type=float, default=None)
     parser.add_argument("--num-images", type=int, default=None)
+    parser.add_argument("--device", default=None)
+    parser.add_argument("--parallel", choices=("true", "false", "auto"), default=None)
     return parser.parse_args(argv)
 
 
@@ -47,6 +50,13 @@ def _build_overrides(args):
         overrides.setdefault("optimizer", {}).setdefault("convergence", {})["fmax"] = args.fmax
     if args.num_images is not None:
         overrides.setdefault("path", {})["num_images"] = args.num_images
+    if args.device is not None:
+        overrides.setdefault("model", {}).setdefault("calculator", {})["device"] = args.device
+    if args.parallel is not None:
+        parallel = args.parallel == "true"
+        if args.parallel == "auto":
+            parallel = detect_world_size() > 1
+        overrides.setdefault("band", {})["parallel"] = parallel
     return overrides or None
 
 
@@ -67,7 +77,13 @@ def _expected_preprocessed_config_path(config_path, raw_config):
 def _resolve_runtime_config_path(config_path):
     config_path = Path(config_path).expanduser().resolve()
     raw_config = load_yaml_file(config_path)
-    if "preprocess" not in raw_config or config_path.stem.endswith("_preprocessed"):
+    path_source = dict(dict(raw_config.get("path", {})).get("source", {}))
+    source_kind = str(path_source.get("kind", "control_points"))
+    if (
+        "preprocess" not in raw_config
+        or config_path.stem.endswith("_preprocessed")
+        or source_kind not in {"control_points", "full_path_xyz"}
+    ):
         return config_path
 
     expected = _expected_preprocessed_config_path(config_path, raw_config)

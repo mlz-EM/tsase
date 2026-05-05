@@ -15,6 +15,7 @@ from tsase.neb.io.manager import OutputManager
 from tsase.neb.models.field import POLARIZATION_E_A2_TO_C_M2
 from tsase.neb.util import sPBC, vmag, vmag2, vproj, vunit
 
+from .climbing import ClimbingImageSelection
 from .geometry import compute_jacobian, image_distance_vector, initialize_image_properties
 from .interfaces import ExecutionContext, ImageEvalResult, PathSpec
 from .mapping import ensure_atom_ids
@@ -39,6 +40,7 @@ class ssneb:
         parallel=False,
         ss=True,
         express=numpy.zeros((3, 3)),
+        climbing_images=None,
         filter_factory=None,
         output_manager=None,
         output_dir=None,
@@ -64,6 +66,12 @@ class ssneb:
         )
         self.layout = self.output.paths
         self.frozen_images = set()
+        self.climbing_images = ClimbingImageSelection.from_config(
+            climbing_images,
+            num_images=self.numImages,
+            enabled_default=True,
+        )
+        self.CI_indices = ()
         self.CI_index = None
 
         if express[0][1] ** 2 + express[0][2] ** 2 + express[1][2] ** 2 > 1e-3:
@@ -229,16 +237,46 @@ class ssneb:
         self.path[index].enthalpy = self.path[index].u
 
     def _refresh_band_state(self):
-        self.CI_index = self._get_ci_index()
+        self.CI_indices = self._get_ci_indices()
+        self.CI_index = self._primary_ci_index(self.CI_indices)
 
-    def _get_ci_index(self):
-        if self.method != "ci":
+    def _local_intermediate_indices(self):
+        if self.numImages <= 2:
+            return []
+        if not self.parallel:
+            return list(range(1, self.numImages - 1))
+        return list(range(1 + self.rank, self.numImages - 1, max(1, self.size)))
+
+    def _primary_ci_index(self, ci_indices):
+        if not ci_indices:
             return None
-        candidates = [
-            index
-            for index in range(1, self.numImages - 1)
-            if index not in self.frozen_images
-        ]
+        return max(
+            ci_indices,
+            key=lambda index: float(getattr(self.path[index], "u", float("-inf"))),
+        )
+
+    def _get_ci_indices(self):
+        if self.method != "ci":
+            return ()
+        if self.climbing_images.enabled:
+            return self.climbing_images.resolve(
+                self.frozen_images,
+                self._get_auto_ci_index,
+            )
+        ci_index = self._get_auto_ci_index(
+            range(1, self.numImages - 1),
+            frozen_images=self.frozen_images,
+        )
+        return () if ci_index is None else (ci_index,)
+
+    def _get_auto_ci_index(self, candidate_indices, *, frozen_images):
+        candidates = []
+        for index in candidate_indices:
+            if index in frozen_images:
+                continue
+            if getattr(self.path[index], "u", None) is None:
+                continue
+            candidates.append(index)
         if not candidates:
             return None
         return max(candidates, key=lambda index: self.path[index].u)
@@ -248,9 +286,8 @@ class ssneb:
 
     def forces(self):
         if self.parallel:
-            imgi = self.rank + 1
             local_results = {}
-            if 1 <= imgi < self.numImages - 1:
+            for imgi in self._local_intermediate_indices():
                 local_results[imgi] = self._evaluate_image(imgi)
             image_results = self.context.allgather_image_results(local_results)
             for i in range(1, self.numImages - 1):
@@ -292,7 +329,7 @@ class ssneb:
                 )
 
         for i in range(1, self.numImages - 1):
-            if self.method == "ci" and self.CI_index is not None and i == self.CI_index:
+            if self.method == "ci" and i in self.CI_indices:
                 self.path[i].totalf -= 2.0 * vproj(self.path[i].totalf, self.path[i].n)
                 self.path[i].fPerp = self.path[i].totalf
             else:

@@ -253,10 +253,15 @@ class minimizer_ssneb:
                 force_perp_max = f_pi
 
         maxi = self.band.Umaxi
+        ci_indices = tuple(getattr(self.band, "CI_indices", ()))
         cii = getattr(self.band, "CI_index", None)
         if cii is None:
             cii = maxi
-        ci_stress = vmag(self.band.path[cii].st)
+        ci_stress = (
+            max(vmag(self.band.path[index].st) for index in ci_indices)
+            if ci_indices
+            else vmag(self.band.path[cii].st)
+        )
         converged = convergence_enabled and force_max <= force_converged
         output = "{:10d} {:16.9g} {:16.9g} {:12.9g} {:8d} {:16.9g} {:10.5g} {:>8}".format(
             iteration,
@@ -285,6 +290,7 @@ class minimizer_ssneb:
             "fmax": float(force_max),
             "fperp_max": float(force_perp_max),
             "ci_stress": float(ci_stress),
+            "climbing_image_indices": [int(index) for index in ci_indices],
             "max_energy_index": int(self.band.Umaxi),
             "max_energy_delta": float(self.band.Umax - self.band.path[0].u),
             "mode": str(self.band.method),

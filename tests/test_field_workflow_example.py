@@ -7,8 +7,9 @@ from ase import Atoms, io
 from ase.filters import FrechetCellFilter
 
 from examples.preprocess_field_ssneb_control_points import main as preprocess_main
-from examples.run_field_ssneb_interpolated import main
+from examples.run_field_ssneb_interpolated import _build_overrides, main
 from tsase.neb.workflows.config import load_field_ssneb_config, load_yaml_file
+from tsase.neb.runtime import resolve_runtime_device
 
 
 class FieldWorkflowExampleTests(unittest.TestCase):
@@ -123,6 +124,130 @@ class FieldWorkflowExampleTests(unittest.TestCase):
             self.assertEqual(resolved.optimizer_kwargs["maxmove"], 0.03)
             self.assertEqual(resolved.optimizer_kwargs["alpha"], 50.0)
 
+    def test_band_parallel_is_resolved_from_yaml(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            start_path = Path(tmpdir) / "start.xyz"
+            end_path = Path(tmpdir) / "end.xyz"
+            io.write(
+                start_path,
+                Atoms("Cu2", positions=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], cell=[5.0, 5.0, 5.0], pbc=True),
+                format="extxyz",
+            )
+            io.write(
+                end_path,
+                Atoms("Cu2", positions=[[0.2, 0.0, 0.0], [1.2, 0.0, 0.0]], cell=[5.0, 5.0, 5.0], pbc=True),
+                format="extxyz",
+            )
+            config_path = Path(tmpdir) / "parallel.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "path:",
+                        "  source:",
+                        "    kind: control_points",
+                        "    files:",
+                        "      - start.xyz",
+                        "      - end.xyz",
+                        "    indices: [0, 3]",
+                        "  num_images: 4",
+                        "model:",
+                        "  calculator:",
+                        "    kind: emt",
+                        "  charges:",
+                        "    kind: array",
+                        "    values: [1.0, -1.0]",
+                        "band:",
+                        "  parallel: true",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            resolved = load_field_ssneb_config(config_path)
+            self.assertTrue(resolved.band_kwargs["parallel"])
+
+    def test_manual_climbing_images_are_resolved_from_yaml(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            start_path = Path(tmpdir) / "start.xyz"
+            end_path = Path(tmpdir) / "end.xyz"
+            io.write(
+                start_path,
+                Atoms("Cu2", positions=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], cell=[5.0, 5.0, 5.0], pbc=True),
+                format="extxyz",
+            )
+            io.write(
+                end_path,
+                Atoms("Cu2", positions=[[0.2, 0.0, 0.0], [1.2, 0.0, 0.0]], cell=[5.0, 5.0, 5.0], pbc=True),
+                format="extxyz",
+            )
+            config_path = Path(tmpdir) / "manual_ci.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "path:",
+                        "  source:",
+                        "    kind: control_points",
+                        "    files:",
+                        "      - start.xyz",
+                        "      - end.xyz",
+                        "    indices: [0, 6]",
+                        "  num_images: 7",
+                        "model:",
+                        "  calculator:",
+                        "    kind: emt",
+                        "  charges:",
+                        "    kind: array",
+                        "    values: [1.0, -1.0]",
+                        "band:",
+                        "  climbing_images:",
+                        "    enabled: true",
+                        "    selection:",
+                        "      - [1, 3]",
+                        "      - [4, 5]",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            resolved = load_field_ssneb_config(config_path)
+
+            self.assertEqual(
+                resolved.band_kwargs["climbing_images"],
+                {"enabled": True, "selection": [[1, 3], [4, 5]]},
+            )
+            self.assertEqual(
+                resolved.resolved_config["band"]["climbing_images"],
+                {"enabled": True, "selection": [[1, 3], [4, 5]]},
+            )
+
+    def test_run_example_parallel_auto_sets_band_parallel_when_world_size_is_multi_rank(self):
+        args = mock.Mock(
+            output_dir=None,
+            max_steps=None,
+            fmax=None,
+            num_images=None,
+            device=None,
+            parallel="auto",
+        )
+
+        with mock.patch("examples.run_field_ssneb_interpolated.detect_world_size", return_value=8):
+            overrides = _build_overrides(args)
+
+        self.assertEqual(overrides["band"]["parallel"], True)
+
+    def test_runtime_device_uses_local_rank_with_visible_cuda_devices(self):
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "CUDA_VISIBLE_DEVICES": "3,5",
+                "SLURM_LOCALID": "1",
+            },
+            clear=False,
+        ):
+            self.assertEqual(resolve_runtime_device("cuda"), "cuda:1")
+
     def test_band_express_is_resolved_from_yaml(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             start_path = Path(tmpdir) / "start.xyz"
@@ -189,9 +314,23 @@ class FieldWorkflowExampleTests(unittest.TestCase):
 
             self.assertTrue(Path(result["processed_config"]).exists())
             self.assertTrue(Path(result["polarization_reference"]).exists())
+            self.assertTrue(Path(result["polarization_reference_extxyz"]).exists())
             self.assertEqual(len(result["processed_control_points"]), 3)
+            self.assertEqual(len(result["processed_control_points_extxyz"]), 3)
             for path in result["processed_control_points"]:
                 self.assertTrue(Path(path).exists())
+            for path in result["processed_control_points_extxyz"]:
+                self.assertTrue(Path(path).exists())
+
+            derived = load_yaml_file(result["processed_config"])
+            self.assertEqual(
+                [Path(path).suffix for path in derived["path"]["source"]["files"]],
+                [".extxyz", ".extxyz", ".extxyz"],
+            )
+            self.assertEqual(
+                Path(derived["model"]["reference"]["file"]).suffix,
+                ".extxyz",
+            )
 
     def test_preprocess_renders_stem_for_all_processed_control_points(self):
         with tempfile.TemporaryDirectory() as tmpdir:

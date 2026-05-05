@@ -1,7 +1,9 @@
 import unittest
+from unittest import mock
 
 import numpy as np
 from ase import Atoms
+from ase.calculators.emt import EMT
 
 from tsase import neb
 
@@ -99,6 +101,87 @@ class NebHelperTests(unittest.TestCase):
         self.assertEqual(len(remeshed), 7)
         lengths = self._path_segment_lengths(remeshed)
         self.assertLess(max(lengths) - min(lengths), 1.0e-10)
+
+    def test_parallel_band_assigns_intermediate_images_round_robin(self):
+        start = make_atoms([[1.0, 2.0, 2.5], [4.0, 2.0, 2.5]])
+        end = make_atoms([[2.0, 3.0, 2.5], [3.0, 3.0, 2.5]])
+        start.calc = EMT()
+        end.calc = EMT()
+        band = neb.ssneb(start, end, numImages=6, parallel=False)
+
+        band.context.is_parallel = True
+        band.context.rank = 0
+        band.context.size = 3
+        self.assertEqual(band._local_intermediate_indices(), [1, 4])
+
+        band.context.rank = 1
+        self.assertEqual(band._local_intermediate_indices(), [2])
+
+        band.context.rank = 2
+        self.assertEqual(band._local_intermediate_indices(), [3])
+
+    def test_parallel_ci_band_constructor_defers_ci_selection_until_energies_exist(self):
+        start = make_atoms([[1.0, 2.0, 2.5], [4.0, 2.0, 2.5]])
+        end = make_atoms([[2.0, 3.0, 2.5], [3.0, 3.0, 2.5]])
+        calc = EMT()
+        start.calc = calc
+        end.calc = calc
+
+        fake_context = mock.Mock()
+        fake_context.is_parallel = True
+        fake_context.rank = 0
+        fake_context.size = 1
+        fake_context.is_output_owner = True
+        fake_context.allgather_image_results.side_effect = lambda payload: dict(payload)
+
+        with mock.patch(
+            "tsase.neb.core.band.ExecutionContext.from_parallel_flag",
+            return_value=fake_context,
+        ):
+            band = neb.ssneb(start, end, numImages=6, parallel=True, ss=False, method="ci")
+
+        self.assertIsNone(band.CI_index)
+
+    def test_manual_climbing_image_ranges_select_one_maximum_per_range(self):
+        start = make_atoms([[1.0, 2.0, 2.5], [4.0, 2.0, 2.5]])
+        end = make_atoms([[2.0, 3.0, 2.5], [3.0, 3.0, 2.5]])
+        calc = EMT()
+        start.calc = calc
+        end.calc = calc
+
+        band = neb.ssneb(
+            start,
+            end,
+            numImages=7,
+            method="ci",
+            ss=False,
+            climbing_images={"enabled": True, "ranges": [[1, 3], [4, 5]]},
+        )
+        for index, energy in enumerate([0.0, 1.0, 5.0, 3.0, 2.0, 4.0, 0.0]):
+            band.path[index].u = energy
+
+        band._refresh_band_state()
+
+        self.assertEqual(band.CI_indices, (2, 5))
+        self.assertEqual(band.CI_index, 2)
+
+    def test_manual_climbing_image_indices_are_used_directly(self):
+        start = make_atoms([[1.0, 2.0, 2.5], [4.0, 2.0, 2.5]])
+        end = make_atoms([[2.0, 3.0, 2.5], [3.0, 3.0, 2.5]])
+        calc = EMT()
+        start.calc = calc
+        end.calc = calc
+
+        band = neb.ssneb(
+            start,
+            end,
+            numImages=7,
+            method="ci",
+            ss=False,
+            climbing_images={"enabled": True, "selection": [2, 4]},
+        )
+
+        self.assertEqual(band.CI_indices, (2, 4))
 
 
 if __name__ == "__main__":

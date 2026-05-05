@@ -1,6 +1,7 @@
 """Maintained public surface for the refactored NEB package."""
 
 from tsase.neb.core.band import ssneb
+from tsase.neb.core.climbing import ClimbingImageSelection
 from tsase.neb.core.geometry import compute_jacobian, image_distance_vector, initialize_image_properties
 from tsase.neb.core.mapping import NEB_ATOM_ID_ARRAY, ensure_atom_ids, reorder_by_atom_ids, spatial_map
 from tsase.neb.core.path import generate_multi_point_path, interpolate_path

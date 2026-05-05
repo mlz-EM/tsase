@@ -12,11 +12,12 @@ import numpy as np
 from ase.calculators.emt import EMT
 from ase.io import read
 
+from tsase.neb.core.climbing import normalize_climbing_images_config
 from tsase.neb.core.interfaces import PathSpec
 from tsase.neb.core.mapping import ensure_atom_ids, reorder_by_atom_ids, spatial_map
 from tsase.neb.models.field import resolve_field_vector
 from tsase.neb.optimize import build_optimizer_kwargs, normalize_optimizer_kind
-from tsase.neb.runtime import load_mace_calculator
+from tsase.neb.runtime import load_mace_calculator, resolve_runtime_device
 
 
 _ENERGY_PROFILE_ENTRY_ALIASES = {
@@ -189,6 +190,14 @@ def _resolve_band_express(band_config):
     if units != "gpa":
         raise ValueError("band.express.units must be GPa in the maintained YAML workflow")
     return _normalize_express_tensor(tensor)
+
+
+def _resolve_climbing_images_config(band_config):
+    if "climbing_images" in band_config:
+        config = band_config.get("climbing_images")
+    else:
+        config = band_config.get("manual_climbing_images")
+    return normalize_climbing_images_config(config, enabled_default=False)
 
 
 def _strip_comment(line):
@@ -405,7 +414,6 @@ def _resolve_path(base_dir, value):
         return path.resolve()
     return (base_dir / path).resolve()
 
-
 def _normalize_loaded_path(images, remap_mode):
     if not images:
         raise ValueError("path source did not yield any images")
@@ -531,6 +539,8 @@ def _build_calculator(calculator_config, base_dir, *, field_vector=None):
             "requires_reference_polarization",
         }
     }
+    if "device" in kwargs:
+        kwargs["device"] = resolve_runtime_device(kwargs["device"])
     if kind == "emt":
         return EMT(), CalculatorMode.intrinsic(kind)
     if kind == "mace":
@@ -777,6 +787,11 @@ class FieldSSNEBConfig:
                     if "dnebOrg" not in (band_kwargs or {})
                     else {"dnebOrg": bool((band_kwargs or {})["dnebOrg"])}
                 ),
+                **(
+                    {"climbing_images": {"enabled": False}}
+                    if not (band_kwargs or {}).get("climbing_images")
+                    else {"climbing_images": (band_kwargs or {})["climbing_images"]}
+                ),
             },
             "optimizer": {
                 "kind": optimizer_kind,
@@ -872,6 +887,7 @@ class FieldSSNEBConfig:
             output_interval = dict(dict(mapping.get("outputs", {})).get("path_snapshot", {}).get("schedule", {})).get("every", 1)
 
         band_kwargs = {
+            "parallel": bool(band_config.get("parallel", False)),
             "ss": bool(band_config.get("ss", True)),
             "weight": float(band_config.get("weight", 1.0)),
         }
@@ -883,6 +899,9 @@ class FieldSSNEBConfig:
             raise ValueError(
                 "band.tangent is no longer supported; the maintained runtime always uses the PE tangent"
             )
+        climbing_images_config = _resolve_climbing_images_config(band_config)
+        if climbing_images_config is not None:
+            band_kwargs["climbing_images"] = climbing_images_config
         express = _resolve_band_express(band_config)
         if express is not None:
             band_kwargs["express"] = express
@@ -933,9 +952,22 @@ class FieldSSNEBConfig:
                 },
                 "band": _deep_update(
                     dict(mapping.get("band", {})),
-                    {}
+                    {
+                        "parallel": bool(band_kwargs.get("parallel", False)),
+                        "climbing_images": (
+                            {"enabled": False}
+                            if climbing_images_config is None
+                            else climbing_images_config
+                        ),
+                    }
                     if express is None
                     else {
+                        "parallel": bool(band_kwargs.get("parallel", False)),
+                        "climbing_images": (
+                            {"enabled": False}
+                            if climbing_images_config is None
+                            else climbing_images_config
+                        ),
                         "express": {
                             "units": "GPa",
                             "tensor": [[float(value) for value in row] for row in express],

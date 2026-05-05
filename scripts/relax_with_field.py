@@ -45,23 +45,23 @@ def parse_args(argv=None):
         "--field-start",
         nargs=3,
         type=float,
-        default=[-75, 300, 0.0],
+        default=[0, 0, 0.0],
         help="Inclusive sweep start in kV/cm.",
     )
     parser.add_argument(
         "--field-end",
         nargs=3,
         type=float,
-        default=[-1000, 4000.0, 0.0],
+        default=[0, 6000.0, 0.0],
         help="Inclusive sweep end in kV/cm.",
     )
     parser.add_argument("--num-fields", type=int, default=30)
-    parser.add_argument("--fmax", type=float, default=0.01)
+    parser.add_argument("--fmax", type=float, default=1e-3)
     parser.add_argument("--max-steps", type=int, default=2000)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--head", default="pt_head")
     parser.add_argument("--default-dtype", default="float64")
-    parser.add_argument("--optimizer", choices=("fire", "bfgs"), default="bfgs")
+    parser.add_argument("--optimizer", choices=("fire", "bfgs"), default="fire")
     parser.add_argument(
         "--cell-mask",
         nargs="+",

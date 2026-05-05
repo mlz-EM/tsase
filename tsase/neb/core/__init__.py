@@ -5,6 +5,7 @@ Allowed dependencies:
 """
 
 from .band import ssneb
+from .climbing import ClimbingImageSelection, normalize_climbing_images_config
 from .geometry import compute_jacobian, image_distance_vector, initialize_image_properties
 from .interfaces import ExecutionContext, ImageEvalResult, PathSpec
 from .mapping import (

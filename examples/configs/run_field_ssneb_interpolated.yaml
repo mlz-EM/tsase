@@ -1,89 +1,74 @@
 run:
   name: run_field_ssneb_interpolated
-  root: example/field_ssneb_runs/run_field_ssneb_interpolated
+  root: example/field_ssneb_runs/run_field_ssneb_interpolated_tri
 
 path:
   source:
     kind: control_points
     files:
-      - "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/examples/structures/AFE_aligned_field_relax/structures/field_0003.cif"
-      - "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/examples/structures/FEm_aligned_field_relax/structures/field_0003.cif"
-      - "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/examples/structures/7-25-50_relaxed.cif"
-      - "/home/gridsan/mzhu/Tools/STEM_TOOL/tsase/examples/structures/7-25-50_field_relax/structures/field_0003.cif"
-    indices: [0, 5, 10, 15]
-  num_images: 16
+      - /home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/preprocessed/run_field_ssneb_interpolated_newModel_clamped/control_point_0000.cif
+      # - /home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/preprocessed/run_field_ssneb_interpolated_newModel_clamped/control_point_0008.cif
+      - /home/gridsan/mzhu/Tools/STEM_TOOL/tsase/image36.cif
+    indices: [0, 63] #[0, 28, 56, 57, 58, 59, 60, 62, 66]
+  num_images: 64
 
 model:
   calculator:
     kind: mace_field
-    model_path: "/home/gridsan/mzhu/Project/qe_examples/PZO/260311_ML/mace_field_transfer/runs/20260406_154128_nc_success/models/MACEField-finetuned.model"
+    model_path: '/home/gridsan/mzhu/Project/qe_examples/AL_MACE-field/runs/single-model-4nodes_fullData_noDFT3_cont/model/models/cm00.model'
     device: cuda
     head: ft_head
-    default_dtype: float32
-
+    default_dtype: float64
   charges:
     kind: species_map
     values:
-      Pb: 2.0
-      Zr: 4.0
-      O: -2.0
+      Pb: 3.9
+      Zr: 5.85
+      O: -3.25
   field:
     kind: cartesian
-    value: [-0.001,  0.01, 0.0]
+    value: [-0.001, -0.005, 0] #[-0.001, -0.005, -0.001] #[-0.0004,  -0.002, -0.0004]
   reference:
     kind: file
-    file: ../../example/Pm-3m.cif
+    file: /home/gridsan/mzhu/Tools/STEM_TOOL/tsase/examples/structures/R3c_prim_supercell_aligned.cif
+
 
 band:
-  spring: 1.0
-  method: normal
+  spring: 2.0
+  method: ci
   ss: true
-  weight: 1.0
+  weight: 1
+  climbing_images:
+    enabled: true
+    selection:
+      - [1, 31]
+      - [32, 62]
+    # To force exact image indices instead, use:
+    # selection: [18, 45]
 
 constraints:
   filter:
-    mask: [0, 1, 0, 1, 0, 1]
+    mask: [0, 0, 0, 0, 0, 0] #
     hydrostatic_strain: false
     constant_volume: false
 
 optimizer:
   kind: fire
-  dt: 0.10
-  dtmax: 0.10
-  maxmove: 0.10
-  output_interval: 50
+  dt: 0.1
+  dtmax: 0.20
+  maxmove: 0.2
+  output_interval: 100
   convergence:
-    fmax: 0.02
-    max_steps: 5000
+    fmax: 0.001
+    max_steps: 2000
   ci_activation:
     force: 0.5
-
-staging:
-  remesh:
-    - target_num_images: 31
-      trigger:
-        kind: stabilized_perp_force
-        min_iterations: 200
-        relative_drop: 0.3
-        window: 5
-        plateau_tolerance: 0.05
-      max_wait_iterations: 200
-      on_miss: force
-    - target_num_images: 51
-      trigger:
-        kind: stabilized_perp_force
-        min_iterations: 200
-        relative_drop: 0.3
-        window: 5
-        plateau_tolerance: 0.05
-      max_wait_iterations: 200
-      on_miss: force
 
 outputs:
   path_snapshot:
     enabled: true
     schedule:
-      every: 50
+      every: 200
       include_final: true
   diagnostics:
     enabled: true
@@ -103,9 +88,9 @@ preprocess:
   output_dir: ../../example/preprocessed/run_field_ssneb_interpolated
   relax:
     enabled: true
-    fmax: 0.05
+    fmax: 1e-5
   reference:
-    symmetrize: true
+    symmetrize: false
     symprec: 1.0
   outputs:
     config_name: run_field_ssneb_interpolated_preprocessed.yaml

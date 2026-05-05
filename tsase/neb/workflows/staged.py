@@ -6,6 +6,7 @@ from typing import Optional
 
 from ase.io import write
 
+from tsase.neb.core.interfaces import ExecutionContext
 from tsase.neb.core.remesh import uniform_remesh
 from tsase.neb.io.manager import OutputManager
 from tsase.neb.optimize import create_optimizer
@@ -110,7 +111,9 @@ def _activate_ci(band, iteration, force_max):
     if hasattr(band, "_refresh_band_state"):
         band._refresh_band_state()
     if band.context.is_output_owner:
-        print(f"Climbing image activated at iteration {iteration} (Total Force={force_max:.9g})")
+        ci_indices = tuple(getattr(band, "CI_indices", ()))
+        ci_detail = "" if not ci_indices else f"; CI images={list(ci_indices)}"
+        print(f"Climbing image activated at iteration {iteration} (Total Force={force_max:.9g}{ci_detail})")
 
 
 def _build_stage_record(*, stage_index, stage_output, band, is_final_stage, stage_result):
@@ -349,16 +352,22 @@ def run_staged_ssneb(
     minimize_options = {} if minimize_kwargs is None else dict(minimize_kwargs)
     force_converged = float(minimize_options.get("forceConverged", 0.01))
     max_iterations = int(minimize_options.get("maxIterations", 1000))
+    execution_context = ExecutionContext.from_parallel_flag(bool(band_options.get("parallel", False)))
 
     workflow_output = (
         OutputManager.create(
             base_dir="neb_runs",
             run_name="staged_ssneb",
             timestamp=True,
+            active=execution_context.is_output_owner,
             settings=output_settings,
         )
         if output_dir is None
-        else OutputManager.from_run_dir(output_dir, settings=output_settings)
+        else OutputManager.from_run_dir(
+            output_dir,
+            active=execution_context.is_output_owner,
+            settings=output_settings,
+        )
     )
     workflow_output.paths.config_dir.mkdir(parents=True, exist_ok=True)
     workflow_output.paths.transitions_dir.mkdir(parents=True, exist_ok=True)
