@@ -319,11 +319,13 @@ class OutputManager:
             return None
         self.paths.path_dir.mkdir(parents=True, exist_ok=True)
         images = self.make_snapshot_images(path)
-        outfile = self.paths.path_dir / f"iter_{int(iteration):04d}.cif"
-        io.write(str(outfile), images, format="cif")
+        cif_outfile = self.paths.path_dir / f"iter_{int(iteration):04d}.cif"
+        extxyz_outfile = self.paths.path_dir / f"iter_{int(iteration):04d}.extxyz"
+        io.write(str(cif_outfile), images, format="cif")
+        io.write(str(extxyz_outfile), images, format="extxyz")
         if self.settings["stem"]:
             result = stem_sequence_writer(
-                xyz_file=outfile,
+                xyz_file=cif_outfile,
                 output_dir=self.paths.stem_dir,
                 iteration=iteration,
                 emit_npy=False,
@@ -334,15 +336,18 @@ class OutputManager:
                     "Projected STEM visualization skipped for "
                     f"iter_{int(iteration):04d}; see {diagnostics_file}"
                 )
-        return str(outfile)
+        return str(cif_outfile)
 
     def write_final_path_snapshot(self, path):
         if not self.is_active or not self.settings["final_path_snapshot"]:
             return None
         self.paths.path_dir.mkdir(parents=True, exist_ok=True)
-        outfile = self.paths.path_dir / "final.cif"
-        io.write(str(outfile), self.make_snapshot_images(path), format="cif")
-        return str(outfile)
+        images = self.make_snapshot_images(path)
+        cif_outfile = self.paths.path_dir / "final.cif"
+        extxyz_outfile = self.paths.path_dir / "final.extxyz"
+        io.write(str(cif_outfile), images, format="cif")
+        io.write(str(extxyz_outfile), images, format="extxyz")
+        return str(cif_outfile)
 
     def write_energy_profile_csv(self, iteration, entries, rows):
         if (

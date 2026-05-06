@@ -260,6 +260,7 @@ class ssneb:
             return ()
         if self.climbing_images.enabled:
             return self.climbing_images.resolve(
+                self.path,
                 self.frozen_images,
                 self._get_auto_ci_index,
             )
