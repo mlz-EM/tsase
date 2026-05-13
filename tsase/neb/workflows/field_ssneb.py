@@ -68,7 +68,6 @@ def run_field_ssneb(*, config=None, **unexpected_kwargs):
         optimizer_kind=resolved.optimizer_kind,
         optimizer_kwargs=resolved.optimizer_kwargs,
         minimize_kwargs=resolved.minimize_kwargs,
-        image_mobility_rates=resolved.image_mobility_rates,
         ci_activation_iteration=resolved.ci_activation_iteration,
         ci_activation_force=resolved.ci_activation_force,
         script_path=resolved.script_path,

@@ -4,7 +4,7 @@ import os
 
 
 DIAGNOSTICS_HEADER = (
-    "iteration,image,frozen,U,field_term,pv,H,px,py,pz,Px,Py,Pz\n"
+    "iteration,image,U,field_term,pv,H,dipole_x,dipole_y,dipole_z,polarization_x,polarization_y,polarization_z\n"
 )
 
 
@@ -16,7 +16,7 @@ def initialize_diagnostics_file(path):
         handle.write(DIAGNOSTICS_HEADER)
 
 
-def append_diagnostics_rows(path, iteration, images, frozen_images):
+def append_diagnostics_rows(path, iteration, images):
     with open(path, "a", encoding="utf-8") as handle:
         for i, image in enumerate(images):
             base_u = getattr(image, "base_u", None)
@@ -24,10 +24,9 @@ def append_diagnostics_rows(path, iteration, images, frozen_images):
             base_u = float("nan") if base_u is None else float(base_u)
             field_u = float("nan") if field_u is None else float(field_u)
             handle.write(
-                "{:d},{:d},{:d},{:.16e},{:.16e},{:.16e},{:.16e},{:.16e},{:.16e},{:.16e},{:.16e},{:.16e},{:.16e}\n".format(
+                "{:d},{:d},{:.16e},{:.16e},{:.16e},{:.16e},{:.16e},{:.16e},{:.16e},{:.16e},{:.16e},{:.16e}\n".format(
                     int(iteration),
                     i,
-                    1 if i in frozen_images else 0,
                     base_u,
                     field_u,
                     float(getattr(image, "pv", 0.0)),

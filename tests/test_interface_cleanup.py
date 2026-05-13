@@ -102,7 +102,7 @@ class InterfaceCleanupTests(unittest.TestCase):
                 run_dir=Path(tmpdir) / "zero_field",
                 method="normal",
                 band_kwargs={"ss": False},
-                optimizer_kwargs={"maxmove": 0.05, "dt": 0.05, "dtmax": 0.05, "output_interval": 1},
+                optimizer_kwargs={"maxmove": 0.05, "dt": 0.05, "dtmax": 0.05},
                 minimize_kwargs={"forceConverged": 10.0, "maxIterations": 1},
             )
             result = run_field_ssneb(config=config)
@@ -154,8 +154,10 @@ class InterfaceCleanupTests(unittest.TestCase):
                         "constraints:",
                         "  filter:",
                         "    mask: [0, 1, 0, 1, 0, 1]",
+                        "outputs:",
+                        "  schedule:",
+                        "    every: 1",
                         "optimizer:",
-                        "  output_interval: 1",
                         "  dt: 0.01",
                         "  dtmax: 0.01",
                         "  maxmove: 0.01",
@@ -225,8 +227,10 @@ class InterfaceCleanupTests(unittest.TestCase):
                         "  method: normal",
                         "  dneb: true",
                         "  dnebOrg: true",
+                        "outputs:",
+                        "  schedule:",
+                        "    every: 1",
                         "optimizer:",
-                        "  output_interval: 1",
                         "  dt: 0.01",
                         "  dtmax: 0.01",
                         "  maxmove: 0.01",
@@ -246,6 +250,62 @@ class InterfaceCleanupTests(unittest.TestCase):
             result = run_field_ssneb(config=config)
             self.assertTrue(result["band"].dneb)
             self.assertTrue(result["band"].dnebOrg)
+
+    def test_yaml_stem_species_groups_reach_output_settings(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            start_path = Path(tmpdir) / "start.xyz"
+            end_path = Path(tmpdir) / "end.xyz"
+            io.write(
+                start_path,
+                Atoms("Cu2", positions=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], cell=[5.0, 5.0, 5.0], pbc=True),
+                format="extxyz",
+            )
+            io.write(
+                end_path,
+                Atoms("Cu2", positions=[[0.2, 0.0, 0.0], [1.2, 0.0, 0.0]], cell=[5.0, 5.0, 5.0], pbc=True),
+                format="extxyz",
+            )
+
+            config_path = Path(tmpdir) / "stem_groups.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "path:",
+                        "  source:",
+                        "    kind: control_points",
+                        "    files:",
+                        "      - start.xyz",
+                        "      - end.xyz",
+                        "    indices: [0, 2]",
+                        "  num_images: 3",
+                        "model:",
+                        "  calculator:",
+                        "    kind: emt",
+                        "  charges:",
+                        "    kind: array",
+                        "    values: [1.0, -1.0]",
+                        "outputs:",
+                        "  stem:",
+                        "    enabled: true",
+                        "    A: ['Pb']",
+                        "    B: ['Mg', 'W']",
+                        "    X: ['O']",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            config = load_field_ssneb_config(config_path)
+
+            self.assertEqual(
+                config.output_settings["stem_species_groups"],
+                {"A": ["Pb"], "B": ["Mg", "W"], "X": ["O"]},
+            )
+            self.assertEqual(
+                config.resolved_config["outputs"]["stem"]["B"],
+                ["Mg", "W"],
+            )
 
     def test_full_path_xyz_replaces_restart_xyz_in_maintained_config(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -325,7 +385,6 @@ class InterfaceCleanupTests(unittest.TestCase):
             )
             optimizer = fire_ssneb(
                 band,
-                output_interval=1,
                 dt=0.01,
                 dtmax=0.01,
             )
@@ -352,9 +411,9 @@ class InterfaceCleanupTests(unittest.TestCase):
                 ss=False,
                 method="normal",
             )
+            band.output.settings["output_interval"] = 50
             optimizer = fire_ssneb(
                 band,
-                output_interval=50,
                 dt=0.01,
                 dtmax=0.01,
             )
@@ -393,7 +452,6 @@ class InterfaceCleanupTests(unittest.TestCase):
                 image.polarization_c_per_m2 = np.array([1.0, 2.0, 3.0], dtype=float)
             optimizer = fire_ssneb(
                 band,
-                output_interval=1,
                 dt=0.01,
                 dtmax=0.01,
                 plot_property="px",
@@ -423,7 +481,6 @@ class InterfaceCleanupTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "energy_profile_entries"):
                 fire_ssneb(
                     band,
-                    output_interval=1,
                     dt=0.01,
                     dtmax=0.01,
                     energy_profile_entries=["polariztion_x"],
@@ -448,7 +505,6 @@ class InterfaceCleanupTests(unittest.TestCase):
                 band,
                 maxmove=0.2,
                 alpha=1.0,
-                output_interval=1,
             )
 
             previous_positions = band.path[1].get_positions().copy()

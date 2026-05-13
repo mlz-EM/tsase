@@ -74,7 +74,7 @@ class StagedWorkflowTests(unittest.TestCase):
                 method="ci",
                 output_dir=output_dir,
                 band_kwargs={"ss": False},
-                optimizer_kwargs={"dt": 0.05, "dtmax": 0.05, "output_interval": 1},
+                optimizer_kwargs={"dt": 0.05, "dtmax": 0.05},
                 minimize_kwargs={"forceConverged": 10.0, "maxIterations": 1},
                 ci_activation_force=10.0,
             )
@@ -118,7 +118,7 @@ class StagedWorkflowTests(unittest.TestCase):
                 method="normal",
                 output_dir=output_dir,
                 band_kwargs={"ss": False},
-                optimizer_kwargs={"dt": 0.05, "dtmax": 0.05, "output_interval": 1},
+                optimizer_kwargs={"dt": 0.05, "dtmax": 0.05},
                 minimize_kwargs={"forceConverged": 10.0, "maxIterations": 1},
             )
 
@@ -151,7 +151,7 @@ class StagedWorkflowTests(unittest.TestCase):
                     method="normal",
                     output_dir=output_dir,
                     band_kwargs={"ss": False},
-                    optimizer_kwargs={"dt": 0.05, "dtmax": 0.05, "output_interval": 1},
+                    optimizer_kwargs={"dt": 0.05, "dtmax": 0.05},
                     minimize_kwargs={"forceConverged": 10.0, "maxIterations": 1},
                 )
 
@@ -183,8 +183,9 @@ class StagedWorkflowTests(unittest.TestCase):
                 k=1.5,
                 method="normal",
                 output_dir=output_dir,
+                output_settings={"output_interval": 50},
                 band_kwargs={"ss": False},
-                optimizer_kwargs={"dt": 0.05, "dtmax": 0.05, "output_interval": 50},
+                optimizer_kwargs={"dt": 0.05, "dtmax": 0.05},
                 minimize_kwargs={"forceConverged": 10.0, "maxIterations": 1},
             )
 
@@ -212,7 +213,7 @@ class StagedWorkflowTests(unittest.TestCase):
                     output_dir=root / optimizer_kind,
                     band_kwargs={"ss": False},
                     optimizer_kind=optimizer_kind,
-                    optimizer_kwargs={"output_interval": 1},
+                    optimizer_kwargs={},
                     minimize_kwargs={"forceConverged": 10.0, "maxIterations": 1},
                 )
 

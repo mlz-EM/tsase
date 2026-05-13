@@ -118,6 +118,7 @@ class OutputManager:
         self.is_active = bool(active)
         self._log_handle = None
         defaults = {
+            "output_interval": 1,
             "diagnostics": True,
             "path_snapshots": True,
             "energy_profile": True,
@@ -125,6 +126,11 @@ class OutputManager:
             "energy_profile_plot": True,
             "energy_profile_entries": ["enthalpy_adjusted", "intrinsic_energy", "field_energy", "polarization_mag"],
             "stem": False,
+            "stem_species_groups": {
+                "A": ["Pb"],
+                "B": ["Zr"],
+                "X": ["O"],
+            },
             "final_path_snapshot": True,
         }
         if settings:
@@ -282,9 +288,9 @@ class OutputManager:
         if self.is_active and self.settings["diagnostics"]:
             initialize_diagnostics_file(str(self.paths.diagnostics_file))
 
-    def write_diagnostics(self, iteration, images, frozen_images):
+    def write_diagnostics(self, iteration, images):
         if self.is_active and self.settings["diagnostics"]:
-            append_diagnostics_rows(str(self.paths.diagnostics_file), iteration, images, frozen_images)
+            append_diagnostics_rows(str(self.paths.diagnostics_file), iteration, images)
 
     def make_snapshot_images(self, path):
         images = []
@@ -329,6 +335,7 @@ class OutputManager:
                 output_dir=self.paths.stem_dir,
                 iteration=iteration,
                 emit_npy=False,
+                species_groups=self.settings.get("stem_species_groups"),
             )
             if isinstance(result, dict) and result.get("status") != "ok":
                 diagnostics_file = result.get("diagnostics_file")

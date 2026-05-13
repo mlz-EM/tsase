@@ -21,6 +21,11 @@ _IMAGE_SHIFTS = np.array(
     dtype=float,
 )
 _PM_TO_ANGSTROM = 0.01
+_DEFAULT_SPECIES_GROUPS = {
+    "A": ("Pb",),
+    "B": ("Zr",),
+    "X": ("O",),
+}
 
 
 class StemAnalysisError(RuntimeError):
@@ -48,6 +53,7 @@ class ProjectedFrameAnalysis:
     frame_index: int
     grid_size: int
     cell_xy: np.ndarray
+    species_groups: dict[str, tuple[str, ...]]
     pb_frac: np.ndarray
     zr_frac: np.ndarray
     oh_frac: np.ndarray
@@ -69,6 +75,41 @@ class ProjectedFrameAnalysis:
     horizontal_pair_family: str
     diagnostics: dict[str, object]
     components: list[ColumnComponent]
+
+
+def _resolve_species_groups(species_groups):
+    source = _DEFAULT_SPECIES_GROUPS if species_groups is None else dict(species_groups)
+    normalized = {}
+    for label in ("A", "B", "X"):
+        values = source.get(label, _DEFAULT_SPECIES_GROUPS[label])
+        if isinstance(values, str):
+            values = [values]
+        entries = []
+        for value in list(values):
+            symbol = str(value).strip()
+            if not symbol:
+                raise ValueError(f"species group {label} must not contain empty symbols")
+            if symbol not in entries:
+                entries.append(symbol)
+        if not entries:
+            raise ValueError(f"species group {label} must contain at least one symbol")
+        normalized[label] = tuple(entries)
+    overlap = set(normalized["A"]) & set(normalized["B"])
+    overlap |= set(normalized["A"]) & set(normalized["X"])
+    overlap |= set(normalized["B"]) & set(normalized["X"])
+    if overlap:
+        raise ValueError(
+            "A/B/X species groups must be disjoint; overlapping symbols: "
+            + ", ".join(sorted(overlap))
+        )
+    return normalized
+
+
+def _format_species_group(group_name, species_groups):
+    symbols = tuple(_resolve_species_groups(species_groups)[group_name])
+    if symbols == _DEFAULT_SPECIES_GROUPS[group_name]:
+        return {"A": "A", "B": "B", "X": "X"}[group_name]
+    return f"{group_name} ({'/'.join(symbols)})"
 
 
 def _wrap01(values):
@@ -257,11 +298,15 @@ def _repair_oversegmented_columns(columns, weights, cell_xy, target_count, label
     return np.asarray(columns, dtype=float), merges
 
 
-def _build_column_sets(atoms, cutoff_angstrom, *, grid_size):
+def _build_column_sets(atoms, cutoff_angstrom, *, grid_size, species_groups=None):
     symbols = np.asarray(atoms.get_chemical_symbols())
     cell_xy = _cell_xy_from_atoms(atoms)
     projected_fractional = _projected_fractional_positions(atoms)
     raw_components = _connected_components(projected_fractional, cell_xy, cutoff_angstrom)
+    species_groups = _resolve_species_groups(species_groups)
+    a_species = set(species_groups["A"])
+    b_species = set(species_groups["B"])
+    x_species = set(species_groups["X"])
 
     pb_columns = []
     pb_weights = []
@@ -277,24 +322,28 @@ def _build_column_sets(atoms, cutoff_angstrom, *, grid_size):
             species_counts[symbol] = species_counts.get(symbol, 0) + 1
 
         species_set = set(species_counts)
-        if species_set == {"Pb"}:
-            classification = "pb"
+        if species_set <= a_species:
+            classification = "a"
             centroid = _torus_average(projected_fractional[list(atom_indices)], cell_xy)
             pb_columns.append(centroid)
             pb_weights.append(len(atom_indices))
-        elif species_set == {"O"}:
-            classification = "o_only"
+        elif species_set <= x_species:
+            classification = "x_only"
             centroid = _torus_average(projected_fractional[list(atom_indices)], cell_xy)
             oxygen_columns.append(centroid)
-        elif species_set <= {"Zr", "O"} and "Zr" in species_set:
-            zr_indices = [index for index in atom_indices if symbols[index] == "Zr"]
+        elif species_set <= (b_species | x_species) and species_set & b_species:
+            zr_indices = [index for index in atom_indices if symbols[index] in b_species]
             if not zr_indices:
                 raise StemAnalysisError(
-                    "encountered a Zr-containing component with no Zr atoms after filtering",
-                    diagnostics={"component": atom_indices, "species_counts": species_counts},
+                    "encountered a B-containing component with no B-site atoms after filtering",
+                    diagnostics={
+                        "component": atom_indices,
+                        "species_counts": species_counts,
+                        "species_groups": {key: list(value) for key, value in species_groups.items()},
+                    },
                 )
             centroid = _torus_average(projected_fractional[zr_indices], cell_xy)
-            classification = "mixed_zr_o" if "O" in species_set else "zr_only"
+            classification = "mixed_b_x" if species_set & x_species else "b_only"
             zr_columns.append(centroid)
             zr_weights.append(len(zr_indices))
         else:
@@ -313,6 +362,7 @@ def _build_column_sets(atoms, cutoff_angstrom, *, grid_size):
                 diagnostics={
                     "species_counts": species_counts,
                     "atom_indices": list(atom_indices),
+                    "species_groups": {key: list(value) for key, value in species_groups.items()},
                 },
             )
 
@@ -330,7 +380,7 @@ def _build_column_sets(atoms, cutoff_angstrom, *, grid_size):
         pb_weights,
         cell_xy,
         target_count=_expected_pb_columns(grid_size),
-        label="Pb",
+        label="A",
         grid_size=grid_size,
     )
     zr_columns, zr_merges = _repair_oversegmented_columns(
@@ -338,17 +388,18 @@ def _build_column_sets(atoms, cutoff_angstrom, *, grid_size):
         zr_weights,
         cell_xy,
         target_count=_expected_zr_columns(grid_size),
-        label="Zr",
+        label="B",
         grid_size=grid_size,
     )
 
     diagnostics = {
         "component_count": len(column_components),
-        "pb_columns": len(pb_columns),
-        "zr_columns": len(zr_columns),
-        "o_columns_total": len(oxygen_columns),
-        "pb_merges": pb_merges,
-        "zr_merges": zr_merges,
+        "species_groups": {key: list(value) for key, value in species_groups.items()},
+        "a_columns": len(pb_columns),
+        "b_columns": len(zr_columns),
+        "x_columns_total": len(oxygen_columns),
+        "a_merges": pb_merges,
+        "b_merges": zr_merges,
         "components": [
             {
                 "size": len(component.atom_indices),
@@ -375,7 +426,7 @@ def _build_column_sets(atoms, cutoff_angstrom, *, grid_size):
         raise StemAnalysisError(
             (
                 f"projected column counts do not match the expected {grid_size}x{grid_size} pseudocubic lattice "
-                f"(Pb={len(pb_columns)}, Zr={len(zr_columns)}, O-only={len(oxygen_columns)})"
+                f"(A={len(pb_columns)}, B={len(zr_columns)}, X-only={len(oxygen_columns)})"
             ),
             diagnostics=diagnostics,
         )
@@ -487,7 +538,7 @@ def _build_pb_grid(pb_columns, cell_xy, *, grid_size, previous_pb_plot_grid=None
                 best = candidate
 
     if best is None:
-        raise StemAnalysisError(f"failed to build a consistent Pb {grid_size}x{grid_size} grid")
+        raise StemAnalysisError(f"failed to build a consistent A-site {grid_size}x{grid_size} grid")
 
     u_spacing = [
         _torus_distance(
@@ -512,7 +563,7 @@ def _build_pb_grid(pb_columns, cell_xy, *, grid_size, previous_pb_plot_grid=None
             ideal_nodes[i, j] = [best["u_levels"][i], best["v_levels"][j]]
             if _torus_distance(best["assigned"][i, j], ideal_nodes[i, j], cell_xy) > max_reasonable_distance:
                 raise StemAnalysisError(
-                    "a Pb column was assigned too far from its ideal lattice node",
+                    "an A-site column was assigned too far from its ideal lattice node",
                     diagnostics={
                         "max_reasonable_distance_angstrom": max_reasonable_distance,
                         "assigned_pb_grid": best["assigned"].tolist(),
@@ -661,7 +712,7 @@ def _assign_edge_oxygen_columns(actual_positions, ideal_grid, cell_xy, max_reaso
     flat_ideal = ideal_grid.reshape(-1, 2)
     if len(actual_positions) < len(flat_ideal):
         raise StemAnalysisError(
-            "not enough oxygen-only columns were found to populate the Pb-edge topology",
+            "not enough X-only columns were found to populate the A-site edge topology",
             diagnostics={
                 "oxygen_columns_found": len(actual_positions),
                 "oxygen_columns_required": len(flat_ideal),
@@ -679,9 +730,9 @@ def _assign_edge_oxygen_columns(actual_positions, ideal_grid, cell_xy, max_reaso
         selected_costs.append(float(cost[row, col]))
         if cost[row, col] > max_reasonable_distance:
             raise StemAnalysisError(
-                "an oxygen-only column was assigned too far from its ideal Pb-edge site",
+                "an X-only column was assigned too far from its ideal A-site edge site",
                 diagnostics={
-                    "label": "O-only",
+                    "label": "X-only",
                     "max_reasonable_distance_angstrom": max_reasonable_distance,
                     "assigned_distance_angstrom": float(cost[row, col]),
                     "ideal_flat_index": int(col),
@@ -816,10 +867,13 @@ def analyze_projected_neb_image(
     frame_index=0,
     previous_pb_plot_grid=None,
     horizontal_pair_family=None,
+    species_groups=None,
     cutoff_angstrom=_COLUMN_CUTOFF_ANG,
     grid_size=_GRID_SIZE,
 ):
     """Analyze one ASE ``Atoms`` image in the projected ``ab`` plane."""
+
+    species_groups = _resolve_species_groups(species_groups)
 
     (
         pb_columns,
@@ -828,7 +882,12 @@ def analyze_projected_neb_image(
         column_components,
         diagnostics,
         cell_xy,
-    ) = _build_column_sets(atoms, cutoff_angstrom=cutoff_angstrom, grid_size=grid_size)
+    ) = _build_column_sets(
+        atoms,
+        cutoff_angstrom=cutoff_angstrom,
+        grid_size=grid_size,
+        species_groups=species_groups,
+    )
 
     pb_grid, u_levels, v_levels, max_reasonable_distance = _build_pb_grid(
         pb_columns,
@@ -849,7 +908,7 @@ def analyze_projected_neb_image(
         zr_columns,
         zr_ideal,
         cell_xy,
-        label="Zr",
+        label="B",
         max_reasonable_distance=max_reasonable_distance,
     )
     oxygen_ideal = np.concatenate([oh_ideal.reshape(-1, 2), ov_ideal.reshape(-1, 2)], axis=0)
@@ -915,6 +974,7 @@ def analyze_projected_neb_image(
         frame_index=int(frame_index),
         grid_size=int(grid_size),
         cell_xy=np.asarray(cell_xy, dtype=float),
+        species_groups=dict(species_groups),
         pb_frac=np.asarray(pb_grid, dtype=float),
         zr_frac=np.asarray(zr_grid, dtype=float),
         oh_frac=np.asarray(oh_grid, dtype=float),
@@ -1008,6 +1068,10 @@ def render_projected_frame(analysis, output_path):
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 5), constrained_layout=True)
     grid_size = int(getattr(analysis, "grid_size", analysis.pb_plot_xy.shape[0]))
+    species_groups = getattr(analysis, "species_groups", _DEFAULT_SPECIES_GROUPS)
+    a_label = _format_species_group("A", species_groups)
+    b_label = _format_species_group("B", species_groups)
+    x_label = _format_species_group("X", species_groups)
     outline = _cell_outline(analysis.cell_xy)
     a_axis = np.asarray(analysis.cell_xy[0], dtype=float)
     x_values = outline[:, 0].tolist()
@@ -1026,7 +1090,7 @@ def render_projected_frame(analysis, output_path):
         axis.set_xticks([])
         axis.set_yticks([])
 
-    axes[0].set_title("Zr-O Tilt")
+    axes[0].set_title(f"{b_label}-{x_label} Tilt")
     zr_tiles = analysis.zr_tiles_xy.reshape(-1, 4, 2)
     patches = [Polygon(points, closed=True) for points in zr_tiles]
     patch_values = np.clip(analysis.zr_tilt_deg.reshape(-1), -1.0, 1.0)
@@ -1057,7 +1121,7 @@ def render_projected_frame(analysis, output_path):
         reference_xy=a_axis,
     ).reshape(-1, 3)
     raw_angles = _vector_angles_degrees(analysis.pb_displacement_xy, a_axis).reshape(-1)
-    axes[1].set_title("Pb Displacement")
+    axes[1].set_title(f"{a_label} Displacement")
     raw_tile_collection = PatchCollection(
         [Polygon(tile, closed=True) for tile in pb_tiles],
         facecolor=raw_colors,
@@ -1090,7 +1154,7 @@ def render_projected_frame(analysis, output_path):
         analysis.pb_displacement_minus_mean_xy,
         a_axis,
     ).reshape(-1)
-    axes[2].set_title("Pb Displacement - Mean")
+    axes[2].set_title(f"{a_label} Displacement - Mean")
     mean_tile_collection = PatchCollection(
         [Polygon(tile, closed=True) for tile in pb_tiles],
         facecolor=mean_sub_colors,
@@ -1177,7 +1241,7 @@ def _failed_direct_stem_sequence_result(
     }
 
 
-def _analyze_projected_sequence(images, *, cutoff_angstrom, grid_size):
+def _analyze_projected_sequence(images, *, cutoff_angstrom, grid_size, species_groups=None):
     analyses = []
     anchor_pb_plot_grid = None
     horizontal_pair_family = None
@@ -1187,6 +1251,7 @@ def _analyze_projected_sequence(images, *, cutoff_angstrom, grid_size):
             frame_index=frame_index,
             previous_pb_plot_grid=anchor_pb_plot_grid,
             horizontal_pair_family=horizontal_pair_family,
+            species_groups=species_groups,
             cutoff_angstrom=cutoff_angstrom,
             grid_size=grid_size,
         )
@@ -1201,6 +1266,15 @@ def _write_npz_analysis(analyses, output_dir):
     output_dir = Path(output_dir)
     npz_path = output_dir / "stem_analysis.npz"
     metadata_path = output_dir / "stem_analysis_metadata.json"
+    species_groups = (
+        {key: list(value) for key, value in dict(getattr(analyses[0], "species_groups", _DEFAULT_SPECIES_GROUPS)).items()}
+        if analyses
+        else {key: list(value) for key, value in _DEFAULT_SPECIES_GROUPS.items()}
+    )
+    grid_sizes = [
+        int(getattr(analysis, "grid_size", getattr(analysis, "pb_plot_frac").shape[0]))
+        for analysis in analyses
+    ]
     np.savez(
         npz_path,
         frame_indices=np.asarray([analysis.frame_index for analysis in analyses], dtype=int),
@@ -1223,13 +1297,14 @@ def _write_npz_analysis(analyses, output_dir):
     metadata_path.write_text(
         json.dumps(
             {
+                "species_groups": species_groups,
                 "units": {
                     "cartesian_coordinates": "angstrom",
                     "projected_fractional": "fractional_ab",
-                    "zr_tilt_deg": "degrees",
-                    "polar_displacements": "angstrom",
+                    "b_tilt_deg": "degrees",
+                    "a_displacements": "angstrom",
                 },
-                "grid_size": [analysis.grid_size for analysis in analyses],
+                "grid_size": grid_sizes,
                 "frame_diagnostics": [analysis.diagnostics for analysis in analyses],
                 "horizontal_pair_family": [analysis.horizontal_pair_family for analysis in analyses],
             },
@@ -1252,6 +1327,7 @@ def analyze_stem_sequence_from_xyz(
     emit_npy=True,
     emit_diagnostics=True,
     gif_duration_seconds=0.4,
+    species_groups=None,
     cutoff_angstrom=_COLUMN_CUTOFF_ANG,
     grid_size=_GRID_SIZE,
 ):
@@ -1272,7 +1348,12 @@ def analyze_stem_sequence_from_xyz(
 
     try:
         images = read(str(xyz_path), ":")
-        analyses = _analyze_projected_sequence(images, cutoff_angstrom=cutoff_angstrom, grid_size=grid_size)
+        analyses = _analyze_projected_sequence(
+            images,
+            cutoff_angstrom=cutoff_angstrom,
+            grid_size=grid_size,
+            species_groups=species_groups,
+        )
     except StemAnalysisError as error:
         return _failed_stem_sequence_result(
             xyz_path=xyz_path,
@@ -1304,6 +1385,7 @@ def analyze_stem_sequence_from_xyz(
         "frame_dir": str(frame_dir),
         "frames_rendered": len(analyses),
         "grid_size": int(grid_size),
+        "species_groups": {key: list(value) for key, value in _resolve_species_groups(species_groups).items()},
     }
     if emit_png:
         frame_dir.mkdir(parents=True, exist_ok=True)
@@ -1410,6 +1492,7 @@ def save_projected_neb_sequence(
     emit_npy=False,
     emit_diagnostics=True,
     gif_duration_seconds=0.4,
+    species_groups=None,
     cutoff_angstrom=_COLUMN_CUTOFF_ANG,
     grid_size=_GRID_SIZE,
 ):
@@ -1431,7 +1514,12 @@ def save_projected_neb_sequence(
     diagnostics_path = xyz_dir / f"stem_iter_{int(iteration):04d}_diagnostics.txt"
 
     try:
-        analyses = _analyze_projected_sequence(images, cutoff_angstrom=cutoff_angstrom, grid_size=grid_size)
+        analyses = _analyze_projected_sequence(
+            images,
+            cutoff_angstrom=cutoff_angstrom,
+            grid_size=grid_size,
+            species_groups=species_groups,
+        )
     except StemAnalysisError as error:
         if emit_diagnostics:
             diagnostics_path.write_text(
@@ -1468,6 +1556,7 @@ def save_projected_neb_sequence(
         "frames_rendered": len(analyses),
         "frame_dir": str(frame_dir),
         "grid_size": int(grid_size),
+        "species_groups": {key: list(value) for key, value in _resolve_species_groups(species_groups).items()},
     }
     if emit_png:
         frame_dir.mkdir(parents=True, exist_ok=True)

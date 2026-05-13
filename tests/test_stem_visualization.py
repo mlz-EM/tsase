@@ -254,7 +254,13 @@ class StemVisualizationTests(unittest.TestCase):
 
     def test_output_manager_surfaces_stem_skip_diagnostics(self):
         with TemporaryDirectory() as tmpdir:
-            output = OutputManager.from_run_dir(tmpdir, settings={"stem": True})
+            output = OutputManager.from_run_dir(
+                tmpdir,
+                settings={
+                    "stem": True,
+                    "stem_species_groups": {"A": ["Pb"], "B": ["Mg", "W"], "X": ["O"]},
+                },
+            )
             images = [Atoms("H", positions=[[0.0, 0.0, 0.0]])]
             captured = {}
 
@@ -272,6 +278,7 @@ class StemVisualizationTests(unittest.TestCase):
             self.assertIn("Projected STEM visualization skipped", stream.getvalue())
             self.assertIn("iter_0005", stream.getvalue())
             self.assertFalse(captured["emit_npy"])
+            self.assertEqual(captured["species_groups"], {"A": ["Pb"], "B": ["Mg", "W"], "X": ["O"]})
 
 
 if __name__ == "__main__":

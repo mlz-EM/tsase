@@ -38,6 +38,12 @@ _ENERGY_PROFILE_ENTRY_ALIASES = {
     "pmag": "polarization_mag",
 }
 
+_DEFAULT_STEM_SPECIES_GROUPS = {
+    "A": ("Pb",),
+    "B": ("Zr",),
+    "X": ("O",),
+}
+
 
 @dataclass(frozen=True)
 class CalculatorMode:
@@ -146,6 +152,56 @@ def _resolve_energy_profile_settings(energy_profile_config, calculator_mode):
         "emit_png": bool(energy_profile_config.get("emit_png", enabled)),
         "entries": filtered_entries,
         "strict": strict,
+    }
+
+
+def _normalize_stem_species_list(values, *, label):
+    if values is None:
+        values = _DEFAULT_STEM_SPECIES_GROUPS[label]
+    elif isinstance(values, str):
+        values = [values]
+    normalized = []
+    for value in list(values):
+        symbol = str(value).strip()
+        if not symbol:
+            raise ValueError(f"outputs.stem.{label} must not contain empty species names")
+        if symbol not in normalized:
+            normalized.append(symbol)
+    if not normalized:
+        raise ValueError(f"outputs.stem.{label} must contain at least one species")
+    return tuple(normalized)
+
+
+def _resolve_stem_settings(stem_config):
+    stem_config = dict(stem_config or {})
+    nested_species = dict(stem_config.get("species", {}))
+    species_groups = {
+        label: _normalize_stem_species_list(
+            stem_config.get(label, nested_species.get(label)),
+            label=label,
+        )
+        for label in ("A", "B", "X")
+    }
+    overlap = set(species_groups["A"]) & set(species_groups["B"])
+    overlap |= set(species_groups["A"]) & set(species_groups["X"])
+    overlap |= set(species_groups["B"]) & set(species_groups["X"])
+    if overlap:
+        raise ValueError(
+            "outputs.stem A/B/X species groups must be disjoint; overlapping symbols: "
+            + ", ".join(sorted(overlap))
+        )
+    return {
+        "enabled": bool(stem_config.get("enabled", False)),
+        "species_groups": {key: list(values) for key, values in species_groups.items()},
+    }
+
+
+def _resolve_output_schedule(outputs_config):
+    outputs_config = dict(outputs_config or {})
+    schedule = dict(outputs_config.get("schedule", {}))
+    return {
+        "every": max(1, int(schedule.get("every", 1))),
+        "include_final": bool(schedule.get("include_final", True)),
     }
 
 
@@ -614,11 +670,15 @@ def _resolve_trigger(trigger_config):
         return None
     trigger_config = dict(trigger_config)
     kind = str(trigger_config.pop("kind", "stabilized_perp_force"))
-    if kind != "stabilized_perp_force":
-        raise ValueError("staging.remesh.trigger.kind must be stabilized_perp_force")
-    from .staged import StabilizedPerpForce
+    if kind == "stabilized_perp_force":
+        from .staged import StabilizedPerpForce
 
-    return StabilizedPerpForce(**trigger_config)
+        return StabilizedPerpForce(**trigger_config)
+    if kind == "force_below":
+        from .staged import ForceBelow
+
+        return ForceBelow(**trigger_config)
+    raise ValueError("staging.remesh.trigger.kind must be one of: stabilized_perp_force, force_below")
 
 
 def _resolve_remesh_stages(staging_config):
@@ -635,11 +695,13 @@ def _resolve_remesh_stages(staging_config):
 
 def _resolve_output_settings(outputs_config, calculator_mode=None):
     outputs_config = dict(outputs_config or {})
+    schedule = _resolve_output_schedule(outputs_config)
     path_snapshot = dict(outputs_config.get("path_snapshot", {}))
     diagnostics = dict(outputs_config.get("diagnostics", {}))
     energy_profile = _resolve_energy_profile_settings(outputs_config.get("energy_profile", {}), calculator_mode)
-    stem = dict(outputs_config.get("stem", {}))
+    stem = _resolve_stem_settings(outputs_config.get("stem", {}))
     settings = {
+        "output_interval": int(schedule["every"]),
         "diagnostics": bool(diagnostics.get("enabled", True)),
         "path_snapshots": bool(path_snapshot.get("enabled", True)),
         "energy_profile": bool(energy_profile.get("enabled", True)),
@@ -647,12 +709,13 @@ def _resolve_output_settings(outputs_config, calculator_mode=None):
         "energy_profile_plot": bool(energy_profile.get("emit_png", energy_profile.get("enabled", True))),
         "energy_profile_entries": list(energy_profile.get("entries", [])),
         "stem": bool(stem.get("enabled", False)),
-        "final_path_snapshot": bool(dict(path_snapshot.get("schedule", {})).get("include_final", True)),
+        "stem_species_groups": dict(stem.get("species_groups", {})),
+        "final_path_snapshot": bool(schedule.get("include_final", True)),
     }
     return settings
 
 
-def _serialize_output_settings(output_settings, *, output_interval):
+def _serialize_output_settings(output_settings):
     settings = dict(output_settings or {})
     energy_profile = {
         "enabled": bool(settings.get("energy_profile", True)),
@@ -660,13 +723,17 @@ def _serialize_output_settings(output_settings, *, output_interval):
         "emit_png": bool(settings.get("energy_profile_plot", settings.get("energy_profile", True))),
         "entries": list(settings.get("energy_profile_entries", [])),
     }
+    stem_species_groups = {
+        key: list(values)
+        for key, values in dict(settings.get("stem_species_groups", {})).items()
+    }
     return {
+        "schedule": {
+            "every": int(settings.get("output_interval", 1)),
+            "include_final": bool(settings.get("final_path_snapshot", True)),
+        },
         "path_snapshot": {
             "enabled": bool(settings.get("path_snapshots", True)),
-            "schedule": {
-                "every": int(output_interval),
-                "include_final": bool(settings.get("final_path_snapshot", True)),
-            },
         },
         "diagnostics": {
             "enabled": bool(settings.get("diagnostics", True)),
@@ -674,6 +741,7 @@ def _serialize_output_settings(output_settings, *, output_interval):
         "energy_profile": energy_profile,
         "stem": {
             "enabled": bool(settings.get("stem", False)),
+            **stem_species_groups,
         },
     }
 
@@ -701,7 +769,6 @@ class FieldSSNEBConfig:
     method: str = "ci"
     filter_factory: object = None
     remesh_stages: object = None
-    image_mobility_rates: object = None
     ci_activation_iteration: Optional[int] = None
     ci_activation_force: Optional[float] = None
     optimizer_kind: str = "fire"
@@ -732,7 +799,6 @@ class FieldSSNEBConfig:
         method="ci",
         filter_factory=None,
         remesh_stages=None,
-        image_mobility_rates=None,
         ci_activation_iteration=None,
         ci_activation_force=None,
         optimizer_kind="fire",
@@ -821,7 +887,6 @@ class FieldSSNEBConfig:
             method=str(method),
             filter_factory=filter_factory,
             remesh_stages=remesh_stages,
-            image_mobility_rates=image_mobility_rates,
             ci_activation_iteration=ci_activation_iteration,
             ci_activation_force=ci_activation_force,
             optimizer_kind=optimizer_kind,
@@ -881,10 +946,19 @@ class FieldSSNEBConfig:
         convergence_config = dict(optimizer_config.get("convergence", {}))
         ci_activation = dict(optimizer_config.get("ci_activation", {}))
         output_settings = _resolve_output_settings(mapping.get("outputs"), calculator_mode)
-
-        output_interval = optimizer_config.get("output_interval")
-        if output_interval is None:
-            output_interval = dict(dict(mapping.get("outputs", {})).get("path_snapshot", {}).get("schedule", {})).get("every", 1)
+        if "output_interval" in optimizer_config:
+            raise ValueError(
+                "optimizer.output_interval is no longer supported; use outputs.schedule.every"
+            )
+        if "image_mobility_rates" in optimizer_config:
+            raise ValueError(
+                "optimizer.image_mobility_rates is no longer supported in the maintained SSNEB workflow"
+            )
+        path_snapshot_config = dict(dict(mapping.get("outputs", {})).get("path_snapshot", {}))
+        if "schedule" in path_snapshot_config:
+            raise ValueError(
+                "outputs.path_snapshot.schedule is no longer supported; use outputs.schedule instead"
+            )
 
         band_kwargs = {
             "parallel": bool(band_config.get("parallel", False)),
@@ -914,7 +988,6 @@ class FieldSSNEBConfig:
         optimizer_kwargs = build_optimizer_kwargs(
             optimizer_kind,
             optimizer_config,
-            output_interval=output_interval,
             energy_profile_entries=output_settings.get("energy_profile_entries", []),
         )
 
@@ -982,7 +1055,6 @@ class FieldSSNEBConfig:
                 ),
                 "outputs": _serialize_output_settings(
                     output_settings,
-                    output_interval=output_interval,
                 ),
             },
         )
@@ -1001,7 +1073,6 @@ class FieldSSNEBConfig:
             method=str(band_config.get("method", "ci")),
             filter_factory=_build_filter_factory(dict(dict(mapping.get("constraints", {})).get("filter", {}))),
             remesh_stages=_resolve_remesh_stages(mapping.get("staging")),
-            image_mobility_rates=dict(optimizer_config.get("image_mobility_rates", {})),
             ci_activation_iteration=ci_activation.get("iteration"),
             ci_activation_force=ci_activation.get("force"),
             optimizer_kind=optimizer_kind,

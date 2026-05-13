@@ -57,7 +57,6 @@ optimizer:
   dt: 0.1
   dtmax: 0.20
   maxmove: 0.2
-  output_interval: 100
   convergence:
     fmax: 0.001
     max_steps: 2000
@@ -65,11 +64,11 @@ optimizer:
     force: 0.5
 
 outputs:
+  schedule:
+    every: 200
+    include_final: true
   path_snapshot:
     enabled: true
-    schedule:
-      every: 200
-      include_final: true
   diagnostics:
     enabled: true
   energy_profile:

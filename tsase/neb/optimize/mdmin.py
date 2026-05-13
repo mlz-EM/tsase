@@ -13,17 +13,13 @@ class mdmin_ssneb(minimizer_ssneb):
         path,
         dt=0.2,
         maxmove=0.1,
-        output_interval=1,
         energy_profile_entries=None,
         plot_property=None,
-        image_mobility_rates=None,
     ):
         super().__init__(
             path,
-            output_interval=output_interval,
             energy_profile_entries=energy_profile_entries,
             plot_property=plot_property,
-            image_mobility_rates=image_mobility_rates,
         )
         self.dt = float(dt)
         self.maxmove = float(maxmove)

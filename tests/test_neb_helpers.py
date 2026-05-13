@@ -183,6 +183,39 @@ class NebHelperTests(unittest.TestCase):
 
         self.assertEqual(band.CI_indices, (2, 4))
 
+    def test_energy_profile_plot_marks_climbing_image_with_red_star(self):
+        from tsase.neb.optimize.base import minimizer_ssneb
+
+        class CaptureOutput:
+            settings = {"energy_profile_plot": True}
+
+            def save_energy_plot(self, fig, iteration):
+                self.fig = fig
+                self.iteration = iteration
+
+        output = CaptureOutput()
+        optimizer = minimizer_ssneb.__new__(minimizer_ssneb)
+        optimizer.output = output
+        optimizer.band = type("Band", (), {"CI_indices": (2,), "CI_index": 2})()
+
+        rows = [
+            {"image": 0, "enthalpy_adjusted": 0.0},
+            {"image": 1, "enthalpy_adjusted": 1.5},
+            {"image": 2, "enthalpy_adjusted": 4.0},
+            {"image": 3, "enthalpy_adjusted": 2.0},
+        ]
+        optimizer._render_energy_plot(7, ["enthalpy_adjusted"], rows)
+
+        star_lines = [
+            line
+            for line in output.fig.axes[0].lines
+            if line.get_marker() == "*" and line.get_color() == "red"
+        ]
+        self.assertEqual(len(star_lines), 1)
+        self.assertEqual(output.iteration, 7)
+        self.assertEqual(list(star_lines[0].get_xdata()), [2])
+        self.assertEqual(list(star_lines[0].get_ydata()), [4.0])
+
 
 if __name__ == "__main__":
     unittest.main()

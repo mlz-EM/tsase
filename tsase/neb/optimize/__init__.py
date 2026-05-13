@@ -53,13 +53,13 @@ def get_optimizer_parameters(kind):
     cls = get_optimizer_class(kind)
     parameters = []
     for name in signature(cls.__init__).parameters:
-        if name in {"self", "path", "band", "image_mobility_rates"}:
+        if name in {"self", "path", "band"}:
             continue
         parameters.append(name)
     return tuple(parameters)
 
 
-def build_optimizer_kwargs(kind, optimizer_config, *, output_interval, energy_profile_entries):
+def build_optimizer_kwargs(kind, optimizer_config, *, energy_profile_entries):
     canonical = normalize_optimizer_kind(kind)
     runtime = {
         key: value
@@ -69,8 +69,6 @@ def build_optimizer_kwargs(kind, optimizer_config, *, output_interval, energy_pr
             "kind",
             "convergence",
             "ci_activation",
-            "image_mobility_rates",
-            "output_interval",
         }
     }
     accepted = set(get_optimizer_parameters(canonical))
@@ -84,15 +82,10 @@ def build_optimizer_kwargs(kind, optimizer_config, *, output_interval, energy_pr
     kwargs.update(runtime)
     if canonical == "fire" and "dtmax" not in runtime:
         kwargs["dtmax"] = kwargs.get("dt", _OPTIMIZER_DEFAULTS["fire"]["dtmax"])
-    kwargs["output_interval"] = int(output_interval)
     kwargs["energy_profile_entries"] = list(energy_profile_entries or [])
     return kwargs
 
 
-def create_optimizer(kind, band, *, image_mobility_rates=None, **optimizer_kwargs):
+def create_optimizer(kind, band, **optimizer_kwargs):
     optimizer_class = get_optimizer_class(kind)
-    return optimizer_class(
-        band,
-        image_mobility_rates=image_mobility_rates,
-        **optimizer_kwargs,
-    )
+    return optimizer_class(band, **optimizer_kwargs)

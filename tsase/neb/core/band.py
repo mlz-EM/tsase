@@ -65,7 +65,6 @@ class ssneb:
             )
         )
         self.layout = self.output.paths
-        self.frozen_images = set()
         self.climbing_images = ClimbingImageSelection.from_config(
             climbing_images,
             num_images=self.numImages,
@@ -261,20 +260,14 @@ class ssneb:
         if self.climbing_images.enabled:
             return self.climbing_images.resolve(
                 self.path,
-                self.frozen_images,
                 self._get_auto_ci_index,
             )
-        ci_index = self._get_auto_ci_index(
-            range(1, self.numImages - 1),
-            frozen_images=self.frozen_images,
-        )
+        ci_index = self._get_auto_ci_index(range(1, self.numImages - 1))
         return () if ci_index is None else (ci_index,)
 
-    def _get_auto_ci_index(self, candidate_indices, *, frozen_images):
+    def _get_auto_ci_index(self, candidate_indices):
         candidates = []
         for index in candidate_indices:
-            if index in frozen_images:
-                continue
             if getattr(self.path[index], "u", None) is None:
                 continue
             candidates.append(index)
@@ -283,7 +276,7 @@ class ssneb:
         return max(candidates, key=lambda index: self.path[index].u)
 
     def write_diagnostics(self, iteration):
-        self.output.write_diagnostics(iteration, self.path, self.frozen_images)
+        self.output.write_diagnostics(iteration, self.path)
 
     def forces(self):
         if self.parallel:

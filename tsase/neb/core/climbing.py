@@ -13,7 +13,7 @@ class ClimbingImageSelection:
     """Climbing-image selector.
 
     Exact indices climb directly. Ranges are resolved at runtime by choosing the
-    highest-energy unfrozen intermediate image in each requested range. Auto
+    highest-energy intermediate image in each requested range. Auto
     mode picks the strongest separated local peaks and then tracks them locally.
     """
 
@@ -77,7 +77,7 @@ class ClimbingImageSelection:
             }
         return {"enabled": True, "ranges": [[start, end] for start, end in self.ranges]}
 
-    def resolve(self, path, frozen_images, auto_select, *, iteration=None):
+    def resolve(self, path, auto_select, *, iteration=None):
         if self.indices:
             return self.indices
 
@@ -89,7 +89,7 @@ class ClimbingImageSelection:
                 and int(iteration) - self._last_update < self.auto_update_interval
             ):
                 return self._tracked_indices
-            tracked = self._resolve_auto_peaks(path, frozen_images)
+            tracked = self._resolve_auto_peaks(path)
             object.__setattr__(self, "_tracked_indices", tracked)
             object.__setattr__(
                 self,
@@ -100,12 +100,12 @@ class ClimbingImageSelection:
 
         indices = []
         for start, end in self.ranges:
-            ci_index = auto_select(range(start, end + 1), frozen_images=frozen_images)
+            ci_index = auto_select(range(start, end + 1))
             if ci_index is not None and ci_index not in indices:
                 indices.append(ci_index)
         return tuple(indices)
 
-    def _resolve_auto_peaks(self, path, frozen_images):
+    def _resolve_auto_peaks(self, path):
         if self._tracked_indices:
             tracked = []
             for index in self._tracked_indices:
@@ -114,13 +114,12 @@ class ClimbingImageSelection:
                 peaks = _ranked_local_peaks(
                     path,
                     range(start, end + 1),
-                    frozen_images=frozen_images,
                     prominence=self.auto_prominence,
                 )
                 if peaks:
                     candidate = peaks[0]
                 else:
-                    candidate = _highest_energy_image(path, range(start, end + 1), frozen_images)
+                    candidate = _highest_energy_image(path, range(start, end + 1))
                 if candidate is not None:
                     tracked.append(candidate)
             selected = _select_separated_peaks(
@@ -135,11 +134,10 @@ class ClimbingImageSelection:
             global_candidates = _ranked_local_peaks(
                 path,
                 range(1, len(path) - 1),
-                frozen_images=frozen_images,
                 prominence=self.auto_prominence,
             )
             if len(global_candidates) < self.auto_count:
-                for index in _ranked_images(path, range(1, len(path) - 1), frozen_images=frozen_images):
+                for index in _ranked_images(path, range(1, len(path) - 1)):
                     if index not in global_candidates:
                         global_candidates.append(index)
             return _fill_separated_peaks(
@@ -151,7 +149,6 @@ class ClimbingImageSelection:
             )
         return _select_auto_peaks(
             path,
-            frozen_images=frozen_images,
             count=self.auto_count,
             min_separation=self.auto_min_separation,
             prominence=self.auto_prominence,
@@ -202,7 +199,6 @@ def normalize_climbing_images_config(config, *, enabled_default):
 def _select_auto_peaks(
     path,
     *,
-    frozen_images,
     count,
     min_separation,
     prominence,
@@ -212,11 +208,10 @@ def _select_auto_peaks(
     peaks = _ranked_local_peaks(
         path,
         range(1, len(path) - 1),
-        frozen_images=frozen_images,
         prominence=prominence,
     )
     if len(peaks) < count:
-        ranked = _ranked_images(path, range(1, len(path) - 1), frozen_images=frozen_images)
+        ranked = _ranked_images(path, range(1, len(path) - 1))
         for index in ranked:
             if index not in peaks:
                 peaks.append(index)
@@ -237,11 +232,11 @@ def _select_auto_peaks(
     )
 
 
-def _ranked_local_peaks(path, candidate_indices, *, frozen_images, prominence):
+def _ranked_local_peaks(path, candidate_indices, *, prominence):
     peaks = []
     for index in candidate_indices:
         energy = _image_energy(path, index)
-        if index in frozen_images or energy is None:
+        if energy is None:
             continue
         left = _image_energy(path, index - 1)
         right = _image_energy(path, index + 1)
@@ -255,20 +250,20 @@ def _ranked_local_peaks(path, candidate_indices, *, frozen_images, prominence):
     return sorted(peaks, key=lambda index: _image_energy(path, index), reverse=True)
 
 
-def _ranked_images(path, candidate_indices, *, frozen_images):
+def _ranked_images(path, candidate_indices):
     return sorted(
         [
             index
             for index in candidate_indices
-            if index not in frozen_images and _image_energy(path, index) is not None
+            if _image_energy(path, index) is not None
         ],
         key=lambda index: _image_energy(path, index),
         reverse=True,
     )
 
 
-def _highest_energy_image(path, candidate_indices, frozen_images):
-    ranked = _ranked_images(path, candidate_indices, frozen_images=frozen_images)
+def _highest_energy_image(path, candidate_indices):
+    ranked = _ranked_images(path, candidate_indices)
     return None if not ranked else ranked[0]
 
 

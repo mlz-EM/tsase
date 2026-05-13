@@ -78,21 +78,22 @@ class FollowupDeliveryTests(unittest.TestCase):
                         "    value: [0.0, 0.0, 0.02]",
                         "band:",
                         "  ss: false",
-                        "optimizer:",
-                        "  output_interval: 1",
-                        "  dt: 0.01",
-                        "  dtmax: 0.01",
-                        "  maxmove: 0.01",
-                        "  convergence:",
-                        "    fmax: 10.0",
-                        "    max_steps: 1",
                         "outputs:",
+                        "  schedule:",
+                        "    every: 1",
                         "  energy_profile:",
                         "    entries:",
                         "      - enthalpy_adjusted",
                         "      - intrinsic_energy",
                         "      - field_energy",
                         "      - polarization_mag",
+                        "optimizer:",
+                        "  dt: 0.01",
+                        "  dtmax: 0.01",
+                        "  maxmove: 0.01",
+                        "  convergence:",
+                        "    fmax: 10.0",
+                        "    max_steps: 1",
                     ]
                 )
                 + "\n",
@@ -134,8 +135,8 @@ class FollowupDeliveryTests(unittest.TestCase):
             diagnostics_path = Path(result["artifacts"].diagnostics_file)
             diagnostics_row = diagnostics_path.read_text(encoding="utf-8").splitlines()[1]
             columns = diagnostics_row.split(",")
+            self.assertEqual(columns[2].lower(), "nan")
             self.assertEqual(columns[3].lower(), "nan")
-            self.assertEqual(columns[4].lower(), "nan")
 
     def test_mace_field_requires_polarization_result(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -177,8 +178,10 @@ class FollowupDeliveryTests(unittest.TestCase):
                         "    value: [0.0, 0.0, 0.02]",
                         "band:",
                         "  ss: false",
+                        "outputs:",
+                        "  schedule:",
+                        "    every: 1",
                         "optimizer:",
-                        "  output_interval: 1",
                         "  dt: 0.01",
                         "  dtmax: 0.01",
                         "  maxmove: 0.01",

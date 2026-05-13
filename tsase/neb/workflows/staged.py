@@ -20,6 +20,7 @@ class RemeshStage:
     trigger: object
     max_wait_iterations: Optional[int] = None
     on_miss: str = "force"
+    spring_scale: float = 1.0
 
     def __post_init__(self):
         if int(self.target_num_images) < 2:
@@ -28,6 +29,8 @@ class RemeshStage:
             raise ValueError("on_miss must be one of: force, skip, error")
         if self.max_wait_iterations is not None and int(self.max_wait_iterations) <= 0:
             raise ValueError("max_wait_iterations must be positive when provided")
+        if float(self.spring_scale) <= 0.0:
+            raise ValueError("spring_scale must be positive")
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,25 @@ class StabilizedPerpForce:
         recent = [entry["fperp_max"] for entry in history[-self.window :]]
         plateau_span = max(recent) - min(recent)
         return plateau_span <= self.plateau_tolerance * max(current, 1.0e-12)
+
+
+@dataclass(frozen=True)
+class ForceBelow:
+    """Trigger remeshing once a recorded force metric drops below a threshold."""
+
+    threshold: float
+    metric: str = "fmax"
+
+    def __post_init__(self):
+        if float(self.threshold) < 0.0:
+            raise ValueError("threshold must be non-negative")
+        if str(self.metric) not in {"fmax", "fperp_max"}:
+            raise ValueError("metric must be one of: fmax, fperp_max")
+
+    def is_triggered(self, history):
+        if not history:
+            return False
+        return float(history[-1][self.metric]) <= float(self.threshold)
 
 
 def _copy_images_with_calculators(images):
@@ -141,10 +163,10 @@ def _write_stage_outputs(
     method,
     force_converged,
     stage_max_iterations,
-    image_mobility_rates,
     script_path,
     git_cwd,
     follow_up_action=None,
+    spring_constant=None,
 ):
     stage_record = _build_stage_record(
         stage_index=stage_index,
@@ -164,13 +186,14 @@ def _write_stage_outputs(
             "requested_method": method if is_final_stage else "normal",
             "force_converged": force_converged,
             "max_iterations": stage_max_iterations,
-            "image_mobility_rates": None if not image_mobility_rates else dict(image_mobility_rates),
+            "spring_constant": spring_constant,
             "remesh_stage": None
             if remesh_stage is None
             else {
                 "target_num_images": remesh_stage.target_num_images,
                 "max_wait_iterations": remesh_stage.max_wait_iterations,
                 "on_miss": remesh_stage.on_miss,
+                "spring_scale": remesh_stage.spring_scale,
                 "trigger": type(remesh_stage.trigger).__name__,
             },
         },
@@ -189,7 +212,6 @@ def _write_workflow_outputs(
     method,
     force_converged,
     max_iterations,
-    image_mobility_rates,
     remesh_plan,
     manifest_config,
     script_path,
@@ -198,6 +220,7 @@ def _write_workflow_outputs(
     transition_records,
     outcome,
     error_message,
+    base_spring,
 ):
     summary = {
         "outcome": outcome,
@@ -220,12 +243,13 @@ def _write_workflow_outputs(
             "requested_method": method,
             "force_converged": force_converged,
             "max_iterations": max_iterations,
-            "image_mobility_rates": None if not image_mobility_rates else dict(image_mobility_rates),
+            "base_spring": float(base_spring),
             "remesh_stages": [
                 {
                     "target_num_images": stage.target_num_images,
                     "max_wait_iterations": stage.max_wait_iterations,
                     "on_miss": stage.on_miss,
+                    "spring_scale": stage.spring_scale,
                     "trigger": type(stage.trigger).__name__,
                 }
                 for stage in remesh_plan
@@ -331,7 +355,6 @@ def run_staged_ssneb(
     optimizer_kind="fire",
     optimizer_kwargs=None,
     minimize_kwargs=None,
-    image_mobility_rates=None,
     ci_activation_iteration=None,
     ci_activation_force=None,
     script_path=None,
@@ -352,6 +375,8 @@ def run_staged_ssneb(
     minimize_options = {} if minimize_kwargs is None else dict(minimize_kwargs)
     force_converged = float(minimize_options.get("forceConverged", 0.01))
     max_iterations = int(minimize_options.get("maxIterations", 1000))
+    base_spring = float(k)
+    current_spring = base_spring
     execution_context = ExecutionContext.from_parallel_flag(bool(band_options.get("parallel", False)))
 
     workflow_output = (
@@ -409,7 +434,7 @@ def run_staged_ssneb(
             current_structures,
             current_indices,
             numImages=current_num_images,
-            k=k,
+            k=current_spring,
             method=stage_method,
             filter_factory=filter_factory,
             output_manager=stage_output,
@@ -419,7 +444,6 @@ def run_staged_ssneb(
         optimizer = create_optimizer(
             optimizer_kind,
             band,
-            image_mobility_rates=image_mobility_rates,
             **optimizer_options,
         )
 
@@ -457,9 +481,9 @@ def run_staged_ssneb(
                 method=method,
                 force_converged=force_converged,
                 stage_max_iterations=stage_max_iterations,
-                image_mobility_rates=image_mobility_rates,
                 script_path=script_path,
                 git_cwd=git_cwd,
+                spring_constant=current_spring,
             )
             executed_stages.append({**stage_record, "artifacts": stage_output})
             final_band = band
@@ -472,7 +496,6 @@ def run_staged_ssneb(
                 method=method,
                 force_converged=force_converged,
                 max_iterations=max_iterations,
-                image_mobility_rates=image_mobility_rates,
                 remesh_plan=remesh_plan,
                 manifest_config=manifest_config,
                 script_path=script_path,
@@ -481,6 +504,7 @@ def run_staged_ssneb(
                 transition_records=transition_records,
                 outcome=outcome,
                 error_message=error_message,
+                base_spring=base_spring,
             )
             raise
 
@@ -506,10 +530,10 @@ def run_staged_ssneb(
             method=method,
             force_converged=force_converged,
             stage_max_iterations=stage_max_iterations,
-            image_mobility_rates=image_mobility_rates,
             script_path=script_path,
             git_cwd=git_cwd,
             follow_up_action=follow_up_action,
+            spring_constant=current_spring,
         )
         executed_stages.append({**stage_record, "artifacts": stage_output})
         final_band = band
@@ -542,6 +566,8 @@ def run_staged_ssneb(
             "to_num_images": remesh_stage.target_num_images,
             "reason": stage_result["reason"],
             "follow_up_action": follow_up_action,
+            "spring_constant": current_spring,
+            "next_stage_spring_constant": base_spring * float(remesh_stage.spring_scale),
             "xyz_file": str(transition_xyz),
             "json_file": str(transition_json),
         }
@@ -551,6 +577,7 @@ def run_staged_ssneb(
         current_structures = _copy_images_with_calculators(remeshed)
         current_indices = list(range(remesh_stage.target_num_images))
         current_num_images = remesh_stage.target_num_images
+        current_spring = base_spring * float(remesh_stage.spring_scale)
 
     workflow_summary, summary_file = _write_workflow_outputs(
         workflow_output=workflow_output,
@@ -558,7 +585,6 @@ def run_staged_ssneb(
         method=method,
         force_converged=force_converged,
         max_iterations=max_iterations,
-        image_mobility_rates=image_mobility_rates,
         remesh_plan=remesh_plan,
         manifest_config=manifest_config,
         script_path=script_path,
@@ -567,6 +593,7 @@ def run_staged_ssneb(
         transition_records=transition_records,
         outcome=outcome,
         error_message=error_message,
+        base_spring=base_spring,
     )
 
     return {

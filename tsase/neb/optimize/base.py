@@ -19,20 +19,19 @@ class minimizer_ssneb:
     def __init__(
         self,
         band,
-        output_interval=1,
         energy_profile_entries=None,
         plot_property=None,
-        image_mobility_rates=None,
     ):
         self.band = band
         self.output = getattr(band, "output", None)
-        self.output_interval = max(1, int(output_interval))
+        self.output_interval = max(
+            1,
+            int(getattr(self.output, "settings", {}).get("output_interval", 1)),
+        )
         self.energy_profile_entries = self._normalize_energy_profile_entries(
             energy_profile_entries=energy_profile_entries,
             plot_property=plot_property,
         )
-        self.image_mobility_rates = {}
-        self.set_image_mobility_rates(image_mobility_rates)
 
     @property
     def generalized_shape(self):
@@ -78,36 +77,11 @@ class minimizer_ssneb:
             or iteration == max_iterations
         )
 
-    def set_image_mobility_rates(self, rates):
-        normalized = {}
-        if rates is None:
-            rates = {}
-        for index, rate in dict(rates).items():
-            image_index = int(index)
-            if image_index <= 0 or image_index >= self.band.numImages - 1:
-                raise ValueError("only intermediate images can have mobility rates")
-            mobility_rate = float(rate)
-            if mobility_rate < 0.0 or mobility_rate > 1.0:
-                raise ValueError("image mobility rates must be within [0.0, 1.0]")
-            normalized[image_index] = mobility_rate
-        self.image_mobility_rates = normalized
-        self.band.frozen_images = {
-            index for index, rate in normalized.items() if rate == 0.0
-        }
-        if hasattr(self.band, "_refresh_band_state"):
-            self.band._refresh_band_state()
-
-    def get_image_mobility_rate(self, image_index):
-        return float(self.image_mobility_rates.get(int(image_index), 1.0))
-
     def _collect_generalized_forces(self):
         self.band.forces()
         totalf = self._zero_generalized_array()
         for image_index in range(1, self.band.numImages - 1):
-            totalf[image_index - 1] = (
-                self.get_image_mobility_rate(image_index)
-                * np.array(self.band.path[image_index].totalf, dtype=float)
-            )
+            totalf[image_index - 1] = np.array(self.band.path[image_index].totalf, dtype=float)
         return totalf
 
     def _apply_generalized_steps(self, displacements):
@@ -170,7 +144,8 @@ class minimizer_ssneb:
 
         lines = []
         labels = []
-        for entry in energy_entries or polarization_entries:
+        primary_entries = energy_entries or polarization_entries
+        for entry in primary_entries:
             line, = primary_axis.plot(
                 x,
                 [row[entry] for row in rows],
@@ -180,6 +155,32 @@ class minimizer_ssneb:
             )
             lines.append(line)
             labels.append(ENTRY_METADATA[entry]["label"])
+
+        ci_indices = tuple(int(index) for index in getattr(self.band, "CI_indices", ()))
+        if not ci_indices:
+            ci_index = getattr(self.band, "CI_index", None)
+            ci_indices = () if ci_index is None else (int(ci_index),)
+        if ci_indices and primary_entries:
+            marker_entry = primary_entries[0]
+            ci_index_set = set(ci_indices)
+            ci_rows = [
+                row
+                for row in rows
+                if row["image"] in ci_index_set and marker_entry in row
+            ]
+            if ci_rows:
+                line, = primary_axis.plot(
+                    [row["image"] for row in ci_rows],
+                    [row[marker_entry] for row in ci_rows],
+                    linestyle="None",
+                    marker="*",
+                    color="red",
+                    markersize=12,
+                    label="Climbing image",
+                    zorder=5,
+                )
+                lines.append(line)
+                labels.append("Climbing image")
 
         if energy_entries and polarization_entries:
             secondary_axis = ax1.twinx()
