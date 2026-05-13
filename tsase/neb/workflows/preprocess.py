@@ -102,13 +102,14 @@ def _build_polarization_reference(atoms, *, symmetrize, symprec):
     return refined_atoms, getattr(dataset, "international", None)
 
 
-def _render_control_point_stem_visualization(processed_structures, destination_dir):
+def _render_control_point_stem_visualization(processed_structures, destination_dir, *, species_groups=None):
     """Render a STEM visualization across all processed control points."""
 
     return save_projected_neb_sequence(
         [atoms.copy() for atoms in processed_structures],
         xyz_dir=Path(destination_dir) / "stem_endpoints",
         iteration=0,
+        species_groups=species_groups,
     )
 
 
@@ -223,7 +224,11 @@ def preprocess_field_ssneb_control_points(config_path, *, output_dir=None):
     polarization_reference.write(polarization_reference_path)
     _write_high_precision_extxyz(polarization_reference_extxyz_path, polarization_reference)
 
-    endpoint_stem = _render_control_point_stem_visualization(processed_structures, destination_dir)
+    endpoint_stem = _render_control_point_stem_visualization(
+        processed_structures,
+        destination_dir,
+        species_groups=config.output_settings.get("stem_species_groups"),
+    )
 
     derived_config = deepcopy(raw_config)
     derived_config.setdefault("path", {}).setdefault("source", {})["files"] = [

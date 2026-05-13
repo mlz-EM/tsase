@@ -371,6 +371,12 @@ class FieldWorkflowExampleTests(unittest.TestCase):
                         "  charges:",
                         "    kind: array",
                         "    values: [1.0, -1.0]",
+                        "outputs:",
+                        "  stem:",
+                        "    enabled: true",
+                        "    A: ['Pb']",
+                        "    B: ['Mg', 'W']",
+                        "    X: ['O']",
                         "preprocess:",
                         "  relax:",
                         "    enabled: true",
@@ -386,10 +392,10 @@ class FieldWorkflowExampleTests(unittest.TestCase):
             captured = {}
 
             def fake_save_projected_neb_sequence(images, *, xyz_dir, iteration, **kwargs):
-                del kwargs
                 captured["images"] = [atoms.copy() for atoms in images]
                 captured["xyz_dir"] = Path(xyz_dir)
                 captured["iteration"] = iteration
+                captured["species_groups"] = kwargs.get("species_groups")
                 return {
                     "status": "ok",
                     "frame_dir": str(Path(xyz_dir) / "stem_iter_0000"),
@@ -413,6 +419,7 @@ class FieldWorkflowExampleTests(unittest.TestCase):
             self.assertEqual(len(captured["images"]), 3)
             self.assertEqual(captured["xyz_dir"], preprocess_dir / "stem_endpoints")
             self.assertEqual(captured["iteration"], 0)
+            self.assertEqual(captured["species_groups"], {"A": ["Pb"], "B": ["Mg", "W"], "X": ["O"]})
             self.assertEqual(result["endpoint_stem"]["status"], "ok")
             self.assertEqual(result["endpoint_stem"]["frames_rendered"], 3)
 
