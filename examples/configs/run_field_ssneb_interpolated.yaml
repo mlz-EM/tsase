@@ -6,16 +6,19 @@ path:
   source:
     kind: control_points
     files:
-      - /home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/preprocessed/run_field_ssneb_interpolated_newModel_clamped/control_point_0000.cif
+      - /home/gridsan/mzhu/Tools/STEM_TOOL/tsase/FE_v1.cif.cif
       # - /home/gridsan/mzhu/Tools/STEM_TOOL/tsase/example/preprocessed/run_field_ssneb_interpolated_newModel_clamped/control_point_0008.cif
-      - /home/gridsan/mzhu/Tools/STEM_TOOL/tsase/image36.cif
-    indices: [0, 63] #[0, 28, 56, 57, 58, 59, 60, 62, 66]
+      - /home/gridsan/mzhu/Tools/STEM_TOOL/tsase/FE_v2.cif.cif
+      - /home/gridsan/mzhu/Tools/STEM_TOOL/tsase/FEm.cif
+      - /home/gridsan/mzhu/Tools/STEM_TOOL/tsase/AFE.cif
+      - /home/gridsan/mzhu/Tools/STEM_TOOL/tsase/FiE.cif
+    indices: [0, 1,2,3,63] #[0, 28, 56, 57, 58, 59, 60, 62, 66]
   num_images: 64
 
 model:
   calculator:
     kind: mace_field
-    model_path: '/home/gridsan/mzhu/Project/qe_examples/AL_MACE-field/runs/single-model-4nodes_fullData_noDFT3_cont/model/models/cm00.model'
+    model_path: /home/gridsan/mzhu/Project/qe_examples/AL_MACE-field/runs/cm00_noCorrection.model
     device: cuda
     head: ft_head
     default_dtype: float64
@@ -27,7 +30,7 @@ model:
       O: -3.25
   field:
     kind: cartesian
-    value: [-0.001, -0.005, 0] #[-0.001, -0.005, -0.001] #[-0.0004,  -0.002, -0.0004]
+    value: [0,0,0] #[-0.001, -0.005, -0.001] #[-0.0004,  -0.002, -0.0004]
   reference:
     kind: file
     file: /home/gridsan/mzhu/Tools/STEM_TOOL/tsase/examples/structures/R3c_prim_supercell_aligned.cif
@@ -48,7 +51,7 @@ band:
 
 constraints:
   filter:
-    mask: [0, 0, 0, 0, 0, 0] #
+    mask: [1, 1, 1, 1, 1, 1] #
     hydrostatic_strain: false
     constant_volume: false
 
@@ -84,7 +87,7 @@ outputs:
     enabled: true
 
 preprocess:
-  output_dir: ../../example/preprocessed/run_field_ssneb_interpolated
+  output_dir: ../../example/preprocessed/pzo_grounstate_prim
   relax:
     enabled: true
     fmax: 1e-5
