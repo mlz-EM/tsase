@@ -1,0 +1,1 @@
+print _get_ca().get_potential_energy()

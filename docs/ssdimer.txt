@@ -1,0 +1,68 @@
+
+.. _ssdimer:
+
+=================
+Solid State Dimer
+=================
+
+The dimer method of Henkelman and Jónsson with improvements by Heyden et al
+and Kästner and Sherwood for estimating the lowest eigenmode using only first derivatives.  
+[#henkelman99_7010]_ [#heyden05_224101]_ [#kastner08_014106]_
+
+The solid state dimer module extends this method to solid state phase transitions. [#Xiao14_174104]_
+
+
+Usage
+=====
+The SSDimer_atoms is an atoms-like class, which defines suitable set_positions(), get_positions(), get_forces() for the solid-state dimer (SSDimer) method to include cell degrees of freedom in saddle search. It becomes the regular dimer by setting "ss=False". External stress tensor can be applied by setting "express" to find saddles on enthalpy surfaces.
+
+class SSDimer_atoms(self, R0 = None, mode = None, maxStep = 0.2, dT = 0.1, dR = 0.001, 
+                 phi_tol = 5, rotationMax = 4, ss = False, express=np.zeros((3,3)), 
+                 rotationOpt = 'cg', weight = 1):
+
+      | **R0** :          an atoms object, which gives the starting point          
+
+      | **mode** :        initial mode (will be randomized if one is not provided) 
+
+      | **maxStep** :     longest distance dimer can move in a single iteration    
+
+      | **dT** :          quickmin timestep
+
+      | **dR** :          separation distance between the two images of the dimer (the finite difference distance)
+
+      | **phi_tol** :     rotation converging tolerence, degree
+
+      | **rotationMax** : max rotations per translational step
+
+      | **ss** :          boolean, solid-state dimer or not
+
+      | **express** :     3*3 matrix, external stress tensor. Columns are the stress vectors. Needs to be in lower triangular form to avoid rigid rotation. 
+
+      | **rotationOpt**:  the optimization method for the rotation part: choose from "sd" (steepest descent), "cg" (conjugate gradient), and "bfgs".
+
+      | **weight**:       extra weight to put on the cell degrees of freedom
+
+Example:
+
+    .. code-block:: none
+
+       from tsase.dimer import ssdimer  
+       d = ssdimer.SSDimer_atoms(R0 = p, rotationMax = 10, phi_tol=3, ss = True)  
+       ### Use quickmin optimizer in ssdimer 
+       d.search(minForce = 0.0001, movie = "dimer2.movie", interval = 20 ) 
+       ### Or use other first order optimizer in ase. 
+       ### Second order optimizers cannot be used when "ss = True".
+       #dyn = MDMin(d) 
+       #dyn.run(fmax=0.0001) 
+
+
+
+.. rubric:: References
+
+.. [#henkelman99_7010] G. Henkelman and H. Jónsson, "A dimer method for finding saddle points on high dimensional potential surfaces using only first derivatives," *J. Chem. Phys.* **111**, 7010-7022 (1999). `DOI <http://dx.doi.org/10.1063/1.480097>`_
+
+.. [#heyden05_224101] A. Heyden, A.T. Bell, and F.J. Keil, "Efficient methods for finding transition states in chemical reactions: Comparison of improved dimer method and partitioned rational function optimization method," *J. Chem. Phys.* **123**, 224101 (2005). `DOI <http://dx.doi.org/10.1063/1.2104507>`_
+
+.. [#kastner08_014106] J. Kästner and P. Sherwood, "Superlinearly converging dimer method for transition state search," *J. Chem. Phys.* **128**, 014106 (2008) `DOI <http://dx.doi.org/10.1063/1.2815812>`_
+
+.. [#Xiao14_174104]  P. Xiao, D. Sheppard, J. Rogal, and G. Henkelman, "Solid-state dimer method for calculating solid-solid phase transitions", *J. Chem. Phys.* **140**, 174104 (2014). `DOI <http://dx.doi.org/10.1063/1.4873437>`_

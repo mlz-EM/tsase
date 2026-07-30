@@ -1,0 +1,28 @@
+# Python-generated files
+__pycache__/
+.pytest_cache
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+.ipynb_checkpoints
+.vscode
+.DS_Store
+
+# Generated workflow outputs and local experiment artifacts
+example/hysteresis_run/
+hysteresis_loop.png
+
+example/preprocessed/
+example/runs/
+
+examples/structures/*_field_relax/
+examples/structures/*_relaxed.cif
+examples/structures/all_field_relax_summary.png
+examples/structures/relaxed*/
+examples/structures/relaxed_w_field/

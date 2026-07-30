@@ -1,0 +1,20 @@
+.. _home:
+
+=================================================
+About TSASE: Transition State Library for `ASE`_
+=================================================
+
+The TSASE library contains python code which depends on `ASE`_ to tackle transition state calculations.
+
+TSASE Contributors
+==================
+
+* Rye Terrell (UT)
+* Sam Chill (UT)
+* Penghao Xiao (UT)
+* Juliana Duncan (UT)
+* Shannon Stauffer (UT)
+* Rileigh Bandy (UT)
+* Jan Janssen (LANL)
+
+.. _ASE: https://wiki.fysik.dtu.dk/ase/index.html

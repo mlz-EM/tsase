@@ -1,0 +1,4 @@
+
+bopfox = tsase.calculators.bopfox()
+_get_ca().set_calculator(bopfox)
+

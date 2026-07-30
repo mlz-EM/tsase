@@ -1,0 +1,84 @@
+.. _ssneb:
+
+===============================
+Solid State Nudged Elastic Band
+===============================
+
+The nudged elastic band (NEB) is a method for finding saddle points and minimum energy paths between known reactants and products. The method works by optimizing a number of intermediate images along the reaction path. Each image finds the lowest energy possible while maintaining equal spacing to neighboring images. This constrained optimization is done by adding spring forces along the band between images and by projecting out the component of the force due to the potential perpendicular to the band.
+
+
+The implementation of solid-state NEB is found in this library. [#Sheppard12_074103]_
+
+Usage
+=====
+The ssneb class performs force projections for each image along the band. It becomes the regular neb if the initial and final states have the same cell vectors or by setting "ss=False". Anisotropic stresses can be applied to find saddles on enthalpy surfaces. [#Xiao12_101101]_ [#Xiao13_144102]_ 
+
+Two optimizers are available for ssneb optimization: fire_ssneb and qm_ssneb.
+
+
+class ssneb(self, p1, p2, numImages = 7, k = 5.0, tangent = "new",  dneb = False, dnebOrg = False, 
+            method = 'normal', onlyci = False, weight = 1, parallel = False, ss = True,
+            express = numpy.zeros((3,3)), fixstrain = numpy.ones((3,3))):
+
+           **Notice** : The cells of the initial and final states (p1 and p2) must be in the lower triangular form to avoid rigid rotation, where the first vector is along the x axis and the second vector is on the xoy plane.
+
+           **p1** :        one endpoint of the path
+
+           **p2** :        the other endpoint of the path
+
+           **numImages** : the total number of images in the path, including the endpoints
+            
+           **k** :         the spring force constant
+
+           **tangent** :   "new" for the new tangent, anything else for the old tangent
+
+           **dneb** :      set to true to use the double-nudging method
+
+           **dnebOrg** :   set to true to use the original double-nudging method
+
+           **method** :    "ci" for the climbing image method, anything else for normal NEB method 
+
+           **onlyci** :    boolean, if true only the climbing image is alloweed to move
+
+           **ss** :        boolean, solid-state neb or regular neb. 
+                           If true, the stresses need to be provided by the calculator.
+
+           **express** :   3*3 matrix, external stress tensor. 
+                           Rows are the stress vectors applied to the corresponding cell vectors. 
+                           Needs to be in lower triangular form to avoid rigid rotation. 
+
+           **fixstrain** : 3*3 matrix as the cell matrix
+                           zero fixes strain at the correspondign direction.
+
+           **weight**  :   extra weight to put on the cell degrees of freedom.
+
+           **parallel** :  bollean, parallelize over images or not
+                           If true, force evaluation of each image will run on one processor. The communication between images is realized by mpi4py. The command to run the python script should be:
+
+                           mpirun -np N python filename.py 
+
+                           where N equals the number of intermedia images, excluding the two end pionts.
+                           This scheme is suitable for empirical potentials.
+                           If the calculator is a DFT code, the user should
+                           refer to pssneb.py where the parallelization over
+                           images is through python pool and each image
+                           invokes mpirun on a designated host when calling the calculator.
+
+Example:
+
+    .. code-block:: none
+
+        from tsase import neb 
+        nim = 7  # number of images, including end points
+        band = neb.ssneb(p1, p2, numImages = nim, method = 'ci')
+        opt = neb.fire_ssneb(band, maxmove =0.2, dtmax = 0.1, dt=0.1)
+        opt.minimize(forceConverged=0.001, maxIterations = 1000)
+
+
+.. rubric:: References
+
+.. [#Sheppard12_074103]  D. Sheppard, P. Xiao, W. Chemelewski, D. D. Johnson, and G. Henkelman, A generalized solid-state nudged elastic band method, *J. Chem. Phys.* **136**, 074103 (2012). `DOI <http://dx.doi.org/10.1063/1.3684549>`_
+
+.. [#Xiao12_101101] P. Xiao and G. Henkelman, Communication: From graphite to diamond: Reaction pathways of the phase transition, *J. Chem. Phys.* **137**, 101101 (2012). `DOI <http://dx.doi.org/10.1063/1.4752249>`_
+
+.. [#Xiao13_144102] P. Xiao, J.-G. Cheng, J.-S. Zhou, J. B. Goodenough, and G. Henkelman, Mechanism of the CaIrO3 post-perovskite phase transition under pressure, *Phys. Rev. B* **88**, 144102 (2013). `DOI <http://dx.doi.org/10.1103/PhysRevB.88.144102>`_

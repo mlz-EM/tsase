@@ -1,0 +1,13 @@
+
+.. _tem:
+
+================================
+TEM Image Comparison
+================================
+
+A comparison of TEM images is done per scoring each pixel.
+
+Usage:
+======
+	temgui
+

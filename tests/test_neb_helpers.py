@@ -1,0 +1,221 @@
+import unittest
+from unittest import mock
+
+import numpy as np
+from ase import Atoms
+from ase.calculators.emt import EMT
+
+from tsase import neb
+
+
+def make_atoms(positions):
+    return Atoms(
+        "Cu2",
+        positions=positions,
+        cell=np.diag([5.0, 5.0, 5.0]),
+        pbc=[True, True, True],
+    )
+
+
+class NebHelperTests(unittest.TestCase):
+    def _path_segment_lengths(self, images):
+        snapshots = [image.copy() for image in images]
+        jacobian = neb.compute_jacobian(
+            snapshots[0].get_volume(),
+            snapshots[-1].get_volume(),
+            len(snapshots[0]),
+        )
+        for image in snapshots:
+            neb.initialize_image_properties(image, jacobian)
+        lengths = []
+        for left, right in zip(snapshots, snapshots[1:]):
+            delta = neb.image_distance_vector(right, left)
+            lengths.append(float(np.linalg.norm(delta)))
+        return lengths
+
+    def test_compute_jacobian_regression_value(self):
+        value = neb.compute_jacobian(100.0, 120.0, 4, weight=1.5)
+        expected = ((110.0 / 4.0) ** (1.0 / 3.0)) * (4.0 ** 0.5) * 1.5
+        self.assertTrue(np.isclose(value, expected))
+
+    def test_generate_multi_point_path_preserves_ids_and_indices(self):
+        start = make_atoms([[1.0, 2.0, 2.5], [4.0, 2.0, 2.5]])
+        mid = make_atoms([[1.5, 2.5, 2.5], [3.5, 2.5, 2.5]])
+        end = make_atoms([[2.0, 3.0, 2.5], [3.0, 3.0, 2.5]])
+
+        path = neb.generate_multi_point_path([start, mid, end], [0, 2, 4], 5)
+
+        self.assertEqual(len(path), 5)
+        self.assertTrue(np.allclose(path[0].get_positions(), start.get_positions()))
+        self.assertTrue(np.allclose(path[2].get_positions(), mid.get_positions()))
+        self.assertTrue(np.allclose(path[4].get_positions(), end.get_positions()))
+        for image in path:
+            self.assertIn(neb.NEB_ATOM_ID_ARRAY, image.arrays)
+            self.assertEqual(image.arrays[neb.NEB_ATOM_ID_ARRAY].tolist(), [0, 1])
+
+    def test_spatial_map_reorders_permuted_structure(self):
+        reference = make_atoms([[1.0, 2.0, 2.5], [4.0, 2.0, 2.5]])
+        candidate = make_atoms([[4.0, 2.0, 2.5], [1.0, 2.0, 2.5]])
+        neb.ensure_atom_ids(reference)
+
+        reordered = neb.spatial_map(reference, candidate)
+
+        self.assertTrue(np.allclose(reordered.get_positions(), reference.get_positions()))
+
+    def test_generate_multi_point_path_preserves_caller_order_without_ids(self):
+        start = make_atoms([[1.0, 2.0, 2.5], [4.0, 2.0, 2.5]])
+        # This midpoint deliberately swaps the two Cu atoms. The path builder
+        # should preserve the caller-supplied correspondence instead of
+        # silently remapping it by nearest-neighbor geometry.
+        midpoint = make_atoms([[3.7, 2.5, 2.5], [1.3, 2.5, 2.5]])
+        end = make_atoms([[2.0, 3.0, 2.5], [3.0, 3.0, 2.5]])
+
+        path = neb.generate_multi_point_path([start, midpoint, end], [0, 2, 4], 5)
+
+        self.assertTrue(np.allclose(path[2].get_positions(), midpoint.get_positions()))
+
+    def test_uniform_remesh_preserves_endpoints_ids_and_field_charges(self):
+        start = make_atoms([[1.0, 2.0, 2.5], [4.0, 2.0, 2.5]])
+        mid = make_atoms([[1.4, 2.4, 2.5], [3.6, 2.4, 2.5]])
+        end = make_atoms([[2.0, 3.0, 2.5], [3.0, 3.0, 2.5]])
+        path = neb.generate_multi_point_path([start, mid, end], [0, 2, 4], 5)
+        for image in path:
+            neb.attach_field_charges(image, [1.0, -1.0])
+
+        remeshed = neb.uniform_remesh(path, num_images=7)
+
+        self.assertEqual(len(remeshed), 7)
+        self.assertTrue(np.allclose(remeshed[0].get_positions(), path[0].get_positions()))
+        self.assertTrue(np.allclose(remeshed[-1].get_positions(), path[-1].get_positions()))
+        for image in remeshed:
+            self.assertEqual(image.arrays[neb.NEB_ATOM_ID_ARRAY].tolist(), [0, 1])
+            self.assertTrue(np.allclose(image.arrays["field_charges"], [1.0, -1.0]))
+
+    def test_uniform_remesh_supports_ratio_and_produces_uniform_metric_spacing(self):
+        start = make_atoms([[1.0, 2.0, 2.5], [4.0, 2.0, 2.5]])
+        end = make_atoms([[2.0, 3.0, 2.5], [3.0, 3.0, 2.5]])
+        path = neb.interpolate_path(start, end, 5)
+
+        remeshed = neb.uniform_remesh(path, upsample_ratio=1.5)
+
+        self.assertEqual(len(remeshed), 7)
+        lengths = self._path_segment_lengths(remeshed)
+        self.assertLess(max(lengths) - min(lengths), 1.0e-10)
+
+    def test_parallel_band_assigns_intermediate_images_round_robin(self):
+        start = make_atoms([[1.0, 2.0, 2.5], [4.0, 2.0, 2.5]])
+        end = make_atoms([[2.0, 3.0, 2.5], [3.0, 3.0, 2.5]])
+        start.calc = EMT()
+        end.calc = EMT()
+        band = neb.ssneb(start, end, numImages=6, parallel=False)
+
+        band.context.is_parallel = True
+        band.context.rank = 0
+        band.context.size = 3
+        self.assertEqual(band._local_intermediate_indices(), [1, 4])
+
+        band.context.rank = 1
+        self.assertEqual(band._local_intermediate_indices(), [2])
+
+        band.context.rank = 2
+        self.assertEqual(band._local_intermediate_indices(), [3])
+
+    def test_parallel_ci_band_constructor_defers_ci_selection_until_energies_exist(self):
+        start = make_atoms([[1.0, 2.0, 2.5], [4.0, 2.0, 2.5]])
+        end = make_atoms([[2.0, 3.0, 2.5], [3.0, 3.0, 2.5]])
+        calc = EMT()
+        start.calc = calc
+        end.calc = calc
+
+        fake_context = mock.Mock()
+        fake_context.is_parallel = True
+        fake_context.rank = 0
+        fake_context.size = 1
+        fake_context.is_output_owner = True
+        fake_context.allgather_image_results.side_effect = lambda payload: dict(payload)
+
+        with mock.patch(
+            "tsase.neb.core.band.ExecutionContext.from_parallel_flag",
+            return_value=fake_context,
+        ):
+            band = neb.ssneb(start, end, numImages=6, parallel=True, ss=False, method="ci")
+
+        self.assertIsNone(band.CI_index)
+
+    def test_manual_climbing_image_ranges_select_one_maximum_per_range(self):
+        start = make_atoms([[1.0, 2.0, 2.5], [4.0, 2.0, 2.5]])
+        end = make_atoms([[2.0, 3.0, 2.5], [3.0, 3.0, 2.5]])
+        calc = EMT()
+        start.calc = calc
+        end.calc = calc
+
+        band = neb.ssneb(
+            start,
+            end,
+            numImages=7,
+            method="ci",
+            ss=False,
+            climbing_images={"enabled": True, "ranges": [[1, 3], [4, 5]]},
+        )
+        for index, energy in enumerate([0.0, 1.0, 5.0, 3.0, 2.0, 4.0, 0.0]):
+            band.path[index].u = energy
+
+        band._refresh_band_state()
+
+        self.assertEqual(band.CI_indices, (2, 5))
+        self.assertEqual(band.CI_index, 2)
+
+    def test_manual_climbing_image_indices_are_used_directly(self):
+        start = make_atoms([[1.0, 2.0, 2.5], [4.0, 2.0, 2.5]])
+        end = make_atoms([[2.0, 3.0, 2.5], [3.0, 3.0, 2.5]])
+        calc = EMT()
+        start.calc = calc
+        end.calc = calc
+
+        band = neb.ssneb(
+            start,
+            end,
+            numImages=7,
+            method="ci",
+            ss=False,
+            climbing_images={"enabled": True, "selection": [2, 4]},
+        )
+
+        self.assertEqual(band.CI_indices, (2, 4))
+
+    def test_energy_profile_plot_marks_climbing_image_with_red_star(self):
+        from tsase.neb.optimize.base import minimizer_ssneb
+
+        class CaptureOutput:
+            settings = {"energy_profile_plot": True}
+
+            def save_energy_plot(self, fig, iteration):
+                self.fig = fig
+                self.iteration = iteration
+
+        output = CaptureOutput()
+        optimizer = minimizer_ssneb.__new__(minimizer_ssneb)
+        optimizer.output = output
+        optimizer.band = type("Band", (), {"CI_indices": (2,), "CI_index": 2})()
+
+        rows = [
+            {"image": 0, "enthalpy_adjusted": 0.0},
+            {"image": 1, "enthalpy_adjusted": 1.5},
+            {"image": 2, "enthalpy_adjusted": 4.0},
+            {"image": 3, "enthalpy_adjusted": 2.0},
+        ]
+        optimizer._render_energy_plot(7, ["enthalpy_adjusted"], rows)
+
+        star_lines = [
+            line
+            for line in output.fig.axes[0].lines
+            if line.get_marker() == "*" and line.get_color() == "red"
+        ]
+        self.assertEqual(len(star_lines), 1)
+        self.assertEqual(output.iteration, 7)
+        self.assertEqual(list(star_lines[0].get_xdata()), [2])
+        self.assertEqual(list(star_lines[0].get_ydata()), [4.0])
+
+
+if __name__ == "__main__":
+    unittest.main()

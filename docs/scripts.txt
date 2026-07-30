@@ -1,0 +1,108 @@
+
+.. _scripts:
+
+================================
+Scripts
+================================
+
+Standalone scripts to handle file conversions and other utlities.
+
+File Conversion
+===============
+
+- **lmp2pos**
+	.. code-block:: sh
+
+		$ lmp2pos <lmp_file/POSCAR> <POSCAR/lmp_file>
+		[DEFAULT OUTPUT] lmp_pos, POSCAR
+		
+- **lmp2con**
+        .. code-block:: sh
+
+                $ lmp2con <lmp_file/file.con> <file.con/lmp_file>
+                [DEFAULT OUTPUT] lmps_pos, pos.con
+
+- **soc2pos**
+        .. code-block:: sh
+
+                $ soc2pos <crystal/POSCAR> <POSCAR/crystal>
+                [DEFAULT OUTPUT] crystal, POSCAR
+
+- **splitxdat**
+	Splits XDATCAR files at given segments and outputs POSCAR.trj or multiple POSCARS
+
+        .. code-block:: sh
+
+                $ splitxdat --help
+
+- **water_solvate**
+	Adds water molecules to outside of structure and saves structure in VASP format.
+
+        .. code-block:: sh
+
+                $ water-solvate --help
+
+- **mobfil**
+	Inputs and outputs ``.con`` files with a cutoff distance
+
+
+Analysis Tools
+==============
+
+- **pdf-make**
+	Takes a ``POSCAR``, ``.con``, or ``XDATCAR`` with options and calculates the radial-distribution function with a spline fit. 
+	Outputs ``pdf.dat`` with raw data and ``interprdf.dat`` containing the spline fit.
+	
+        .. code-block:: sh
+
+                $ pdf-make --help
+- **pdf-plot**
+	Plots ``pdf.dat`` and ``interprdf.dat`` in gnuplot.
+	Outputs ``pdf.eps``
+
+        .. code-block:: sh
+
+                $ pdf-plot 
+
+- **pdf-multiplot**
+        Plots up to 20 ``interprdf-i.dat`` in gnuplot.
+        Outputs ``pdf.eps``
+
+        .. code-block:: sh
+
+                $ pdf-multiplot
+
+- **pdfstats**
+	Calculates number of neighbors, min/max/avg bond distance, and variance with option.
+	Writes to screen and to ``bonds/dat``.
+
+        .. code-block:: sh
+
+                $ pdfstats --help
+
+- **neighbors**
+	Determines nearest neighbors for given file and write to screen.
+	
+        .. code-block:: sh
+
+                $ neighbors <filename>
+
+
+File Visualization
+==================
+- **xyz**
+	Displays atomic configurations in formats: 
+		- .con
+		- VASP (POSCAR and XDATCAR)
+		- lammps (position and dump files)
+		- xyz
+		- bopfox
+		- socorro
+
+        .. code-block:: sh
+
+                $ xyz <filename>
+		
+		
+
+	

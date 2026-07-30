@@ -1,0 +1,44 @@
+
+.. _kdb:
+
+================================
+Kinetic Database
+================================
+
+The Kinetic Databse (KDB) is a method of storing a minimal representation of kinetic events previously calculated so that they can be used to predict future saddle points. Estimates of reactant, saddle, and product geometries consistent with a query configuration speed up aKMC simulations by reducing the number of random saddle point searches needed to reach confidence. Due to its general design, the KDB can also be used for the determination of reaction mechanisms outside of KMC simulations. 
+
+Kinetic Database implementation
+[#Terrell12_014105]_
+
+Usage
+===== 
+
+The query algorithm selects those KDB entries that contain at least as many atoms of the same type as the query configuration. A matching procedure is then used to generate a new set of possible mappings from the previous step repeatedly until all atoms of the KDB configuraton have been mapped to a corresponding atom within the query configuration.
+
+Applying a transformation algorithm to each KDB configuration results in a calculated score for a match. If this score is less than a desired tolerance, the saddle configuration of the KDB entry is used to make a saddle point suggestion. This algorithm is being modified to improve efficiency.
+
+query(reactant, options.kdbdir, "./kdbmatches", dc=options.dc, nf=options.nf, nodupes=options.nodupes)
+
+        **'reactant'** : the structure (atoms object) that will be checked if anything similar to it in the database exists
+
+        **'kdbdir'** : where the database file is stored
+
+        **'outputdir'** : where kdb suggestions are stored
+
+        **'nf'** : neighbor fudge; the percentage of the neighboring image to be explicitly included when removing the periodic boundary condition (pbc)
+
+        **'dc'** : distance cutoff; distance an atom moves to be considered local to the process
+
+        **'nodupes'** : whether or not kdb makes duplicate suggestions
+
+EON
+---
+Instructions for using the KDB with eOn software are located `here <http://theory.cm.utexas.edu/eon/kdb.html>`_.
+
+Future Direction
+----------------
+Currently, changes are being made to the KDB to enhance its usage. The KDB is being converted to a zero configuration, serverless SQLite format. A web based front end is also being considered in order to improve user-access. 
+
+.. rubric:: References
+
+.. [#Terrell12_014105]  R. Terrell, M. Welborn, S. T. Chill, and G. Henkelman, Database of atomistic reaction mechanisms with application to kinetic Monte Carlo, *J. Chem. Phys.* **137**, 014105 (2012). `DOI <http://dx.doi.org/10.1063/1.4730746>`_

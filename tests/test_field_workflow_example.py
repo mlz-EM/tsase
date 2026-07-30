@@ -1,0 +1,574 @@
+import tempfile
+import unittest
+from pathlib import Path
+import sys
+from unittest import mock
+
+import numpy as np
+from ase import Atoms, io
+from ase.filters import FrechetCellFilter
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
+
+from example.preprocess import main as preprocess_main
+from example.run import _build_overrides, main
+from tsase.neb.models.field import resolve_field_config
+from tsase.neb.runtime import resolve_runtime_device
+from tsase.neb.workflows.config import load_field_ssneb_config, load_yaml_file
+
+
+EXAMPLE_CONFIG = REPOSITORY_ROOT / "example" / "input.yaml"
+SMOKE_CONFIG = REPOSITORY_ROOT / "tests" / "fixtures" / "field_ssneb" / "input.yaml"
+
+
+class FieldWorkflowExampleTests(unittest.TestCase):
+    def test_maintained_example_declares_staging_and_energy_profile_entries(self):
+        raw = load_yaml_file(EXAMPLE_CONFIG)
+
+        self.assertIn("staging", raw)
+        self.assertTrue(raw["staging"]["remesh"])
+        self.assertEqual(
+            raw["outputs"]["energy_profile"]["entries"],
+            ["enthalpy_adjusted", "polarization_mag"],
+        )
+
+    def test_maintained_example_is_self_contained_and_uses_neg111_field(self):
+        raw = load_yaml_file(EXAMPLE_CONFIG)
+        self.assertEqual(raw["run"]["root"], "runs/pzo_neg111_field_ssneb")
+        path_values = [
+            raw["run"]["root"],
+            *raw["path"]["source"]["files"],
+            raw["model"]["calculator"]["model_path"],
+            raw["model"]["reference"]["file"],
+            raw["preprocess"]["output_dir"],
+        ]
+        self.assertTrue(all(not Path(value).is_absolute() for value in path_values))
+        for value in raw["path"]["source"]["files"]:
+            self.assertTrue((EXAMPLE_CONFIG.parent / value).is_file())
+        self.assertTrue((EXAMPLE_CONFIG.parent / raw["model"]["calculator"]["model_path"]).is_file())
+        self.assertEqual(raw["model"]["calculator"]["model_path"], "models/PZO.model")
+        self.assertNotIn("charges", raw["model"])
+
+        atoms = io.read(EXAMPLE_CONFIG.parent / raw["path"]["source"]["files"][0])
+        field = resolve_field_config(atoms.cell, raw["model"]["field"])
+        crystal_direction = np.array([-1.0, -1.0, -1.0]) @ atoms.cell.array
+        np.testing.assert_allclose(field / np.linalg.norm(field), crystal_direction / np.linalg.norm(crystal_direction))
+        self.assertAlmostEqual(np.linalg.norm(field), 0.003)
+
+    def test_smoke_config_routes_energy_profile_entries_through_outputs(self):
+        resolved = load_field_ssneb_config(SMOKE_CONFIG)
+
+        self.assertEqual(
+            resolved.optimizer_kwargs["energy_profile_entries"],
+            ["enthalpy_adjusted", "polarization_x"],
+        )
+        self.assertEqual(len(resolved.remesh_stages), 1)
+
+    def test_optimizer_plot_property_is_rejected_in_yaml(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            start_path = Path(tmpdir) / "start.xyz"
+            end_path = Path(tmpdir) / "end.xyz"
+            io.write(
+                start_path,
+                Atoms("Cu2", positions=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], cell=[5.0, 5.0, 5.0], pbc=True),
+                format="extxyz",
+            )
+            io.write(
+                end_path,
+                Atoms("Cu2", positions=[[0.2, 0.0, 0.0], [1.2, 0.0, 0.0]], cell=[5.0, 5.0, 5.0], pbc=True),
+                format="extxyz",
+            )
+            config_path = Path(tmpdir) / "bad_config.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "path:",
+                        "  source:",
+                        "    kind: control_points",
+                        "    files:",
+                        "      - start.xyz",
+                        "      - end.xyz",
+                        "    indices: [0, 2]",
+                        "  num_images: 3",
+                        "model:",
+                        "  calculator:",
+                        "    kind: emt",
+                        "  charges:",
+                        "    kind: array",
+                        "    values: [1.0, -1.0]",
+                        "optimizer:",
+                        "  plot_property: px",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "outputs.energy_profile.entries"):
+                load_field_ssneb_config(config_path)
+
+    def test_optimizer_kind_is_resolved_from_yaml(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            start_path = Path(tmpdir) / "start.xyz"
+            end_path = Path(tmpdir) / "end.xyz"
+            io.write(
+                start_path,
+                Atoms("Cu2", positions=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], cell=[5.0, 5.0, 5.0], pbc=True),
+                format="extxyz",
+            )
+            io.write(
+                end_path,
+                Atoms("Cu2", positions=[[0.2, 0.0, 0.0], [1.2, 0.0, 0.0]], cell=[5.0, 5.0, 5.0], pbc=True),
+                format="extxyz",
+            )
+            config_path = Path(tmpdir) / "bfgs.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "path:",
+                        "  source:",
+                        "    kind: control_points",
+                        "    files:",
+                        "      - start.xyz",
+                        "      - end.xyz",
+                        "    indices: [0, 2]",
+                        "  num_images: 3",
+                        "model:",
+                        "  calculator:",
+                        "    kind: emt",
+                        "  charges:",
+                        "    kind: array",
+                        "    values: [1.0, -1.0]",
+                        "optimizer:",
+                        "  kind: bfgs",
+                        "  maxmove: 0.03",
+                        "  alpha: 50.0",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            resolved = load_field_ssneb_config(config_path)
+            self.assertEqual(resolved.optimizer_kind, "bfgs")
+            self.assertEqual(resolved.optimizer_kwargs["maxmove"], 0.03)
+            self.assertEqual(resolved.optimizer_kwargs["alpha"], 50.0)
+
+    def test_band_parallel_is_resolved_from_yaml(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            start_path = Path(tmpdir) / "start.xyz"
+            end_path = Path(tmpdir) / "end.xyz"
+            io.write(
+                start_path,
+                Atoms("Cu2", positions=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], cell=[5.0, 5.0, 5.0], pbc=True),
+                format="extxyz",
+            )
+            io.write(
+                end_path,
+                Atoms("Cu2", positions=[[0.2, 0.0, 0.0], [1.2, 0.0, 0.0]], cell=[5.0, 5.0, 5.0], pbc=True),
+                format="extxyz",
+            )
+            config_path = Path(tmpdir) / "parallel.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "path:",
+                        "  source:",
+                        "    kind: control_points",
+                        "    files:",
+                        "      - start.xyz",
+                        "      - end.xyz",
+                        "    indices: [0, 3]",
+                        "  num_images: 4",
+                        "model:",
+                        "  calculator:",
+                        "    kind: emt",
+                        "  charges:",
+                        "    kind: array",
+                        "    values: [1.0, -1.0]",
+                        "band:",
+                        "  parallel: true",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            resolved = load_field_ssneb_config(config_path)
+            self.assertTrue(resolved.band_kwargs["parallel"])
+
+    def test_manual_climbing_images_are_resolved_from_yaml(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            start_path = Path(tmpdir) / "start.xyz"
+            end_path = Path(tmpdir) / "end.xyz"
+            io.write(
+                start_path,
+                Atoms("Cu2", positions=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], cell=[5.0, 5.0, 5.0], pbc=True),
+                format="extxyz",
+            )
+            io.write(
+                end_path,
+                Atoms("Cu2", positions=[[0.2, 0.0, 0.0], [1.2, 0.0, 0.0]], cell=[5.0, 5.0, 5.0], pbc=True),
+                format="extxyz",
+            )
+            config_path = Path(tmpdir) / "manual_ci.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "path:",
+                        "  source:",
+                        "    kind: control_points",
+                        "    files:",
+                        "      - start.xyz",
+                        "      - end.xyz",
+                        "    indices: [0, 6]",
+                        "  num_images: 7",
+                        "model:",
+                        "  calculator:",
+                        "    kind: emt",
+                        "  charges:",
+                        "    kind: array",
+                        "    values: [1.0, -1.0]",
+                        "band:",
+                        "  climbing_images:",
+                        "    enabled: true",
+                        "    selection:",
+                        "      - [1, 3]",
+                        "      - [4, 5]",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            resolved = load_field_ssneb_config(config_path)
+
+            self.assertEqual(
+                resolved.band_kwargs["climbing_images"],
+                {"enabled": True, "selection": [[1, 3], [4, 5]]},
+            )
+            self.assertEqual(
+                resolved.resolved_config["band"]["climbing_images"],
+                {"enabled": True, "selection": [[1, 3], [4, 5]]},
+            )
+
+    def test_run_example_parallel_auto_sets_band_parallel_when_world_size_is_multi_rank(self):
+        args = mock.Mock(
+            output_dir=None,
+            max_steps=None,
+            fmax=None,
+            num_images=None,
+            device=None,
+            parallel="auto",
+        )
+
+        with mock.patch("example.run.detect_world_size", return_value=8):
+            overrides = _build_overrides(args)
+
+        self.assertEqual(overrides["band"]["parallel"], True)
+
+    def test_runtime_device_uses_local_rank_with_visible_cuda_devices(self):
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "CUDA_VISIBLE_DEVICES": "3,5",
+                "SLURM_LOCALID": "1",
+            },
+            clear=False,
+        ):
+            self.assertEqual(resolve_runtime_device("cuda"), "cuda:1")
+
+    def test_band_express_is_resolved_from_yaml(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            start_path = Path(tmpdir) / "start.xyz"
+            end_path = Path(tmpdir) / "end.xyz"
+            io.write(
+                start_path,
+                Atoms("Cu2", positions=[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], cell=[5.0, 5.0, 5.0], pbc=True),
+                format="extxyz",
+            )
+            io.write(
+                end_path,
+                Atoms("Cu2", positions=[[0.2, 0.0, 0.0], [1.2, 0.0, 0.0]], cell=[5.0, 5.0, 5.0], pbc=True),
+                format="extxyz",
+            )
+            config_path = Path(tmpdir) / "express.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "path:",
+                        "  source:",
+                        "    kind: control_points",
+                        "    files:",
+                        "      - start.xyz",
+                        "      - end.xyz",
+                        "    indices: [0, 2]",
+                        "  num_images: 3",
+                        "model:",
+                        "  calculator:",
+                        "    kind: emt",
+                        "  charges:",
+                        "    kind: array",
+                        "    values: [1.0, -1.0]",
+                        "band:",
+                        "  express:",
+                        "    units: GPa",
+                        "    tensor:",
+                        "      - [1.0, 3.0, 4.0]",
+                        "      - [5.0, 2.0, 6.0]",
+                        "      - [7.0, 8.0, 9.0]",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            resolved = load_field_ssneb_config(config_path)
+            self.assertEqual(
+                resolved.band_kwargs["express"].tolist(),
+                [[1.0, 0.0, 0.0], [5.0, 2.0, 0.0], [7.0, 8.0, 9.0]],
+            )
+
+    def test_preprocess_example_smoke(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            preprocess_dir = Path(tmpdir) / "preprocessed"
+            result = preprocess_main(
+                [
+                    "--config",
+                    str(SMOKE_CONFIG),
+                    "--output-dir",
+                    str(preprocess_dir),
+                ]
+            )
+
+            self.assertTrue(Path(result["processed_config"]).exists())
+            self.assertTrue(Path(result["polarization_reference"]).exists())
+            self.assertTrue(Path(result["polarization_reference_extxyz"]).exists())
+            self.assertEqual(len(result["processed_control_points"]), 3)
+            self.assertEqual(len(result["processed_control_points_extxyz"]), 3)
+            for path in result["processed_control_points"]:
+                self.assertTrue(Path(path).exists())
+            for path in result["processed_control_points_extxyz"]:
+                self.assertTrue(Path(path).exists())
+
+            derived = load_yaml_file(result["processed_config"])
+            derived_path_values = [
+                derived["run"]["root"],
+                *derived["path"]["source"]["files"],
+                derived["model"]["reference"]["file"],
+            ]
+            self.assertTrue(all(not Path(value).is_absolute() for value in derived_path_values))
+            self.assertEqual(
+                [Path(path).suffix for path in derived["path"]["source"]["files"]],
+                [".extxyz", ".extxyz", ".extxyz"],
+            )
+            self.assertEqual(
+                Path(derived["model"]["reference"]["file"]).suffix,
+                ".extxyz",
+            )
+
+    def test_preprocess_renders_stem_for_all_processed_control_points(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            preprocess_dir = Path(tmpdir) / "preprocessed"
+            start_path = Path(tmpdir) / "start.xyz"
+            middle_path = Path(tmpdir) / "middle.xyz"
+            end_path = Path(tmpdir) / "end.xyz"
+            for path, shift in ((start_path, 0.0), (middle_path, 0.1), (end_path, 0.2)):
+                io.write(
+                    path,
+                    Atoms(
+                        "Cu2",
+                        positions=[[0.0 + shift, 0.0, 0.0], [1.0 + shift, 0.0, 0.0]],
+                        cell=[5.0, 5.0, 5.0],
+                        pbc=True,
+                    ),
+                    format="extxyz",
+                )
+
+            config_path = Path(tmpdir) / "preprocess_stem.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "run:",
+                        "  root: run",
+                        "path:",
+                        "  source:",
+                        "    kind: control_points",
+                        "    files:",
+                        "      - start.xyz",
+                        "      - middle.xyz",
+                        "      - end.xyz",
+                        "    indices: [0, 1, 2]",
+                        "  num_images: 3",
+                        "model:",
+                        "  calculator:",
+                        "    kind: emt",
+                        "  charges:",
+                        "    kind: array",
+                        "    values: [1.0, -1.0]",
+                        "outputs:",
+                        "  stem:",
+                        "    enabled: true",
+                        "    A: ['Pb']",
+                        "    B: ['Mg', 'W']",
+                        "    X: ['O']",
+                        "preprocess:",
+                        "  relax:",
+                        "    enabled: true",
+                        "    fmax: 1.0",
+                        "  reference:",
+                        "    symmetrize: false",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            captured = {}
+
+            def fake_save_projected_neb_sequence(images, *, xyz_dir, iteration, **kwargs):
+                captured["images"] = [atoms.copy() for atoms in images]
+                captured["xyz_dir"] = Path(xyz_dir)
+                captured["iteration"] = iteration
+                captured["species_groups"] = kwargs.get("species_groups")
+                return {
+                    "status": "ok",
+                    "frame_dir": str(Path(xyz_dir) / "stem_iter_0000"),
+                    "gif": str(Path(xyz_dir) / "stem_iter_0000.gif"),
+                    "frames_rendered": len(images),
+                }
+
+            with mock.patch(
+                "tsase.neb.workflows.preprocess.save_projected_neb_sequence",
+                side_effect=fake_save_projected_neb_sequence,
+            ):
+                result = preprocess_main(
+                    [
+                        "--config",
+                        str(config_path),
+                        "--output-dir",
+                        str(preprocess_dir),
+                    ]
+                )
+
+            self.assertEqual(len(captured["images"]), 3)
+            self.assertEqual(captured["xyz_dir"], preprocess_dir / "stem_endpoints")
+            self.assertEqual(captured["iteration"], 0)
+            self.assertEqual(captured["species_groups"], {"A": ["Pb"], "B": ["Mg", "W"], "X": ["O"]})
+            self.assertEqual(result["endpoint_stem"]["status"], "ok")
+            self.assertEqual(result["endpoint_stem"]["frames_rendered"], 3)
+
+    def test_preprocess_control_point_relaxation_uses_configured_cell_filter(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            start_path = Path(tmpdir) / "start.xyz"
+            middle_path = Path(tmpdir) / "middle.xyz"
+            end_path = Path(tmpdir) / "end.xyz"
+            for path, shift in ((start_path, 0.0), (middle_path, 0.1), (end_path, 0.2)):
+                io.write(
+                    path,
+                    Atoms(
+                        "Cu2",
+                        positions=[[0.0 + shift, 0.0, 0.0], [1.0 + shift, 0.0, 0.0]],
+                        cell=[5.0, 5.0, 5.0],
+                        pbc=True,
+                    ),
+                    format="extxyz",
+                )
+
+            config_path = Path(tmpdir) / "preprocess_filter.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "run:",
+                        "  root: run",
+                        "path:",
+                        "  source:",
+                        "    kind: control_points",
+                        "    files:",
+                        "      - start.xyz",
+                        "      - middle.xyz",
+                        "      - end.xyz",
+                        "    indices: [0, 1, 2]",
+                        "  num_images: 3",
+                        "model:",
+                        "  calculator:",
+                        "    kind: emt",
+                        "  charges:",
+                        "    kind: array",
+                        "    values: [1.0, -1.0]",
+                        "constraints:",
+                        "  filter:",
+                        "    mask: [0, 1, 0, 1, 0, 1]",
+                        "preprocess:",
+                        "  relax:",
+                        "    enabled: true",
+                        "    fmax: 1.0",
+                        "  reference:",
+                        "    symmetrize: false",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            seen_targets = []
+
+            class RecordingBFGS:
+                def __init__(self, atoms, *args, **kwargs):
+                    del args, kwargs
+                    seen_targets.append(atoms)
+
+                def run(self, fmax):
+                    del fmax
+                    return True
+
+            with mock.patch("tsase.neb.workflows.preprocess.BFGS", RecordingBFGS):
+                preprocess_main(["--config", str(config_path), "--output-dir", str(Path(tmpdir) / "out")])
+
+            self.assertEqual(len(seen_targets), 3)
+            self.assertTrue(all(isinstance(target, FrechetCellFilter) for target in seen_targets))
+            self.assertEqual(
+                seen_targets[0].mask.tolist(),
+                [[0, 1, 0], [1, 1, 1], [0, 1, 0]],
+            )
+
+    def test_example_smoke(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "field_example"
+            preprocess_dir = Path(tmpdir) / "preprocessed"
+            preprocess_result = preprocess_main(
+                [
+                    "--config",
+                    str(SMOKE_CONFIG),
+                    "--output-dir",
+                    str(preprocess_dir),
+                ]
+            )
+            result = main(
+                [
+                    "--config",
+                    str(preprocess_result["processed_config"]),
+                    "--output-dir",
+                    str(output_dir),
+                    "--max-steps",
+                    "1",
+                    "--num-images",
+                    "5",
+                    "--fmax",
+                    "10.0",
+                ]
+            )
+
+            artifacts = result["artifacts"]
+            workflow_output = result["workflow_output"]
+            self.assertTrue(Path(artifacts.run_dir).exists())
+            self.assertTrue(Path(artifacts.manifest_file).exists())
+            self.assertTrue((workflow_output.paths.config_dir / "workflow_summary.json").exists())
+            self.assertTrue(Path(artifacts.diagnostics_file).exists())
+            self.assertTrue(Path(artifacts.path_dir, "iter_0001.cif").exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

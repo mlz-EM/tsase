@@ -1,0 +1,18 @@
+
+.. _saddle_search:
+
+===============
+Saddle Searches
+===============
+
+Several variaties of saddle searches methods are available in this library including solid-state dimer, lanczos, bgsd, and solid-state neb.
+
+	:ref:`Solid State Dimer<ssdimer>`
+
+	:ref:`Biased Gradient Squared Descent <bgsd>`
+
+	:ref:`Solid State Nudge Elastic Band <ssneb>`
+
+	:ref:`Lanczos<lanczos>`
+
+

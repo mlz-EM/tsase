@@ -1,0 +1,83 @@
+run:
+  name: field_ssneb_smoke
+  root: runs/field_ssneb_smoke
+
+path:
+  source:
+    kind: control_points
+    files:
+      - cu_start.extxyz
+      - cu_mid.extxyz
+      - cu_end.extxyz
+    indices: [0, 2, 4]
+  num_images: 5
+
+model:
+  calculator:
+    kind: emt
+  charges:
+    kind: array
+    values: [1.0, -1.0]
+  field:
+    kind: cartesian
+    value: [0.03, 0.0, 0.0]
+  reference:
+    kind: first_structure
+
+band:
+  spring: 1.5
+  method: normal
+  ss: false
+  weight: 1.0
+
+constraints:
+  filter:
+    enabled: false
+
+optimizer:
+  kind: fire
+  dt: 0.05
+  dtmax: 0.05
+  maxmove: 0.05
+  convergence:
+    fmax: 0.2
+    max_steps: 3
+
+staging:
+  remesh:
+    - target_num_images: 7
+      trigger:
+        kind: stabilized_perp_force
+        min_iterations: 1
+        relative_drop: 0.0
+        window: 1
+        plateau_tolerance: 0.0
+      max_wait_iterations: 1
+      on_miss: force
+
+outputs:
+  schedule:
+    every: 1
+    include_final: true
+  path_snapshot:
+    enabled: true
+  diagnostics:
+    enabled: true
+  energy_profile:
+    enabled: true
+    emit_csv: true
+    emit_png: true
+    entries:
+      - enthalpy_adjusted
+      - polarization_x
+  stem:
+    enabled: false
+
+preprocess:
+  relax:
+    enabled: true
+    fmax: 10.0
+  reference:
+    symmetrize: false
+  outputs:
+    config_name: run.yaml

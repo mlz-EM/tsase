@@ -1,0 +1,7 @@
+
+fname = _plugin_args[0]
+try:
+    _set_ca(tsase.io.read_con(fname))
+except:
+    _set_ca(ase.io.read(fname))
+
